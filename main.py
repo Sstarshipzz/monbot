@@ -1,4 +1,4 @@
-﻿from handlers.admin_features import AdminFeatures
+from handlers.admin_features import AdminFeatures
 from modules.access_manager import AccessManager
 import json
 import base64
@@ -1149,13 +1149,43 @@ async def handle_category_name(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Vérifier les groupes de l'utilisateur
     user_groups = []
+    is_group_category = False
+    selected_group = None
+    
+    # Récupérer tous les groupes de l'utilisateur
     if "groups" in admin_features._access_codes:
         for group_name, members in admin_features._access_codes["groups"].items():
             if user_id in members:
                 user_groups.append(group_name)
-                # Préfixer la catégorie avec le nom du groupe
-                category_name = f"{group_name}_{category_name}"
-                break
+
+    # Si l'utilisateur est dans plusieurs groupes, lui demander de choisir
+    if len(user_groups) > 1:
+        keyboard = []
+        for group_name in user_groups:
+            keyboard.append([InlineKeyboardButton(
+                group_name,
+                callback_data=f"select_group_for_category_{group_name}_{category_name}"
+            )])
+        keyboard.append([InlineKeyboardButton("🔙 Annuler", callback_data="admin")])
+
+        await update.message.reply_text(
+            "📝 Dans quel groupe voulez-vous créer cette catégorie ?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return CHOOSING
+    elif len(user_groups) == 1:
+        # Si l'utilisateur n'est que dans un seul groupe
+        selected_group = user_groups[0]
+        category_name = f"{selected_group}_{category_name}"
+    else:
+        # L'utilisateur n'est dans aucun groupe
+        await update.message.reply_text(
+            "❌ Vous devez être membre d'un groupe pour créer une catégorie.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Retour", callback_data="admin")
+            ]])
+        )
+        return CHOOSING
 
     # Vérifier si la catégorie existe déjà
     if category_name in CATALOG:
@@ -1168,22 +1198,9 @@ async def handle_category_name(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return WAITING_CATEGORY_NAME
 
-    # Ajouter la nouvelle catégorie comme une liste vide
-    CATALOG[category_name] = []  # Changé de {} à []
-    
-    # Debug print pour vérifier le contenu avant sauvegarde
-    print(f"Contenu du CATALOG avant sauvegarde : {CATALOG}")
-    
-    # Sauvegarder immédiatement
+    # Ajouter la nouvelle catégorie
+    CATALOG[category_name] = []
     save_catalog(CATALOG)
-    
-    # Debug print pour vérifier si la sauvegarde a réussi
-    try:
-        with open('config/catalog.json', 'r', encoding='utf-8') as f:
-            saved_content = json.load(f)
-            print(f"Contenu sauvegardé : {saved_content}")
-    except Exception as e:
-        print(f"Erreur lors de la vérification de la sauvegarde : {e}")
 
     # Supprimer les messages
     try:
@@ -1196,7 +1213,7 @@ async def handle_category_name(update: Update, context: ContextTypes.DEFAULT_TYP
         print(f"Erreur lors de la suppression des messages: {e}")
 
     # Message de confirmation
-    display_name = category_name.split("_")[-1] if "_" in category_name else category_name
+    display_name = category_name.split("_", 1)[1] if "_" in category_name else category_name
     keyboard = [
         [InlineKeyboardButton("➕ Ajouter une autre catégorie", callback_data="add_category")],
         [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
@@ -1204,7 +1221,7 @@ async def handle_category_name(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"✅ Catégorie *{display_name}* créée avec succès!",
+        text=f"✅ Catégorie *{display_name}* créée avec succès dans le groupe *{selected_group}*!",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
@@ -2710,118 +2727,134 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data.startswith("view_"):
         category = query.data.replace("view_", "")
         if category in CATALOG:
-            # Initialisation des stats si nécessaire
-            if 'stats' not in CATALOG:
-                CATALOG['stats'] = {
-                    "total_views": 0,
-                    "category_views": {},
-                    "product_views": {},
-                    "last_updated": datetime.now(paris_tz).strftime("%H:%M:%S")
-                }
-
-            if 'category_views' not in CATALOG['stats']:
-                CATALOG['stats']['category_views'] = {}
-
-            if category not in CATALOG['stats']['category_views']:
-                CATALOG['stats']['category_views'][category] = 0
-
-            # Mettre à jour les statistiques
-            CATALOG['stats']['category_views'][category] += 1
-            CATALOG['stats']['total_views'] += 1
-            CATALOG['stats']['last_updated'] = datetime.now(paris_tz).strftime("%H:%M:%S")
-            save_catalog(CATALOG)
-
-            products = CATALOG[category]
-        
-            # Obtenir le nom d'affichage pour la catégorie (sans préfixe)
-            display_category_name = category
+            # Vérifier les permissions de groupe
             user_id = query.from_user.id
-        
-            # Retirer le préfixe du groupe pour l'affichage
+            show_category = True
+
+            # Vérifier si c'est une catégorie de groupe
             if "groups" in admin_features._access_codes:
-                for group_name, members in admin_features._access_codes["groups"].items():
-                    if user_id in members and category.startswith(f"{group_name}_"):
-                        display_category_name = category.replace(f"{group_name}_", "")
+                for group_name in admin_features._access_codes.get("groups", {}).keys():
+                    if category.startswith(f"{group_name}_"):
+                        # Vérifier si l'utilisateur est membre du groupe
+                        if user_id not in admin_features._access_codes["groups"][group_name]:
+                            show_category = False
+                            await query.answer("❌ Vous n'avez pas accès à cette catégorie", show_alert=True)
+                            return CHOOSING
                         break
 
-            # Afficher la liste des produits avec le nom de catégorie sans préfixe
-            text = f"*{display_category_name}*\n\n"
-            keyboard = []
-            for product in products:
-                # Créer un ID court unique pour ce produit
-                nav_id = str(abs(hash(product['name'])) % 1000)
-                # Stocker les informations du produit avec cet ID
-                context.user_data[f'nav_product_{nav_id}'] = {
-                    'category': category,
-                    'name': product['name']
-                }
-                keyboard.append([InlineKeyboardButton(
-                    product['name'],
-                    callback_data=f"product_{nav_id}"  # Utiliser l'ID court
-                )])
-
-            keyboard.append([InlineKeyboardButton("🔙 Retour au menu", callback_data="show_categories")])
-
-            try:
-                # Suppression du dernier message de produit (photo ou vidéo) si existe
-                if 'last_product_message_id' in context.user_data:
-                    try:
-                        await context.bot.delete_message(
-                            chat_id=query.message.chat_id,
-                            message_id=context.user_data['last_product_message_id']
-                        )
-                        del context.user_data['last_product_message_id']
-                    except:
-                        pass
-
-                print(f"Texte du message : {text}")
-                print(f"Clavier : {keyboard}")
-
-                # Éditer le message existant au lieu de le supprimer et recréer
-                await query.message.edit_text(
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
-    
-                context.user_data['category_message_id'] = query.message.message_id
-                context.user_data['category_message_text'] = text
-                context.user_data['category_message_reply_markup'] = keyboard
-
-            except Exception as e:
-                print(f"Erreur lors de la mise à jour du message des produits: {e}")
-                # Si l'édition échoue, on crée un nouveau message
-                message = await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
-                context.user_data['category_message_id'] = message.message_id
-
-            # Mettre à jour les stats des produits seulement s'il y en a
-            if products:
+            if show_category:
+                # Initialisation des stats si nécessaire
                 if 'stats' not in CATALOG:
                     CATALOG['stats'] = {
                         "total_views": 0,
                         "category_views": {},
                         "product_views": {},
-                        "last_updated": datetime.now(paris_tz).strftime("%H:%M:%S"),
-                        "last_reset": datetime.now(paris_tz).strftime("%Y-%m-%d")
+                        "last_updated": datetime.now(paris_tz).strftime("%H:%M:%S")
                     }
 
-                if 'product_views' not in CATALOG['stats']:
-                    CATALOG['stats']['product_views'] = {}
-                if category not in CATALOG['stats']['product_views']:
-                    CATALOG['stats']['product_views'][category] = {}
+                if 'category_views' not in CATALOG['stats']:
+                    CATALOG['stats']['category_views'] = {}
 
-                # Mettre à jour les stats pour chaque produit dans la catégorie
-                for product in products:
-                    if product['name'] not in CATALOG['stats']['product_views'][category]:
-                        CATALOG['stats']['product_views'][category][product['name']] = 0
-                    CATALOG['stats']['product_views'][category][product['name']] += 1
+                if category not in CATALOG['stats']['category_views']:
+                    CATALOG['stats']['category_views'][category] = 0
 
+                # Mettre à jour les statistiques
+                CATALOG['stats']['category_views'][category] += 1
+                CATALOG['stats']['total_views'] += 1
+                CATALOG['stats']['last_updated'] = datetime.now(paris_tz).strftime("%H:%M:%S")
                 save_catalog(CATALOG)
+
+                products = CATALOG[category]
+        
+                # Obtenir le nom d'affichage pour la catégorie (sans préfixe)
+                display_category_name = category
+                user_id = query.from_user.id
+        
+                # Retirer le préfixe du groupe pour l'affichage
+                if "groups" in admin_features._access_codes:
+                    for group_name, members in admin_features._access_codes["groups"].items():
+                        if user_id in members and category.startswith(f"{group_name}_"):
+                            display_category_name = category.replace(f"{group_name}_", "")
+                            break
+
+                # Afficher la liste des produits avec le nom de catégorie sans préfixe
+                text = f"*{display_category_name}*\n\n"
+                keyboard = []
+                for product in products:
+                    # Créer un ID court unique pour ce produit
+                    nav_id = str(abs(hash(product['name'])) % 1000)
+                    # Stocker les informations du produit avec cet ID
+                    context.user_data[f'nav_product_{nav_id}'] = {
+                        'category': category,
+                        'name': product['name']
+                    }
+                    keyboard.append([InlineKeyboardButton(
+                        product['name'],
+                        callback_data=f"product_{nav_id}"  # Utiliser l'ID court
+                    )])
+
+                keyboard.append([InlineKeyboardButton("🔙 Retour au menu", callback_data="show_categories")])
+
+                try:
+                    # Suppression du dernier message de produit (photo ou vidéo) si existe
+                    if 'last_product_message_id' in context.user_data:
+                        try:
+                            await context.bot.delete_message(
+                                chat_id=query.message.chat_id,
+                                message_id=context.user_data['last_product_message_id']
+                            )
+                            del context.user_data['last_product_message_id']
+                        except:
+                            pass
+
+                    print(f"Texte du message : {text}")
+                    print(f"Clavier : {keyboard}")
+
+                    # Éditer le message existant au lieu de le supprimer et recréer
+                    await query.message.edit_text(
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='Markdown'
+                    )
+    
+                    context.user_data['category_message_id'] = query.message.message_id
+                    context.user_data['category_message_text'] = text
+                    context.user_data['category_message_reply_markup'] = keyboard
+
+                except Exception as e:
+                    print(f"Erreur lors de la mise à jour du message des produits: {e}")
+                    # Si l'édition échoue, on crée un nouveau message
+                    message = await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='Markdown'
+                    )
+                    context.user_data['category_message_id'] = message.message_id
+
+                # Mettre à jour les stats des produits seulement s'il y en a
+                if products:
+                    if 'stats' not in CATALOG:
+                        CATALOG['stats'] = {
+                            "total_views": 0,
+                            "category_views": {},
+                            "product_views": {},
+                            "last_updated": datetime.now(paris_tz).strftime("%H:%M:%S"),
+                            "last_reset": datetime.now(paris_tz).strftime("%Y-%m-%d")
+                        }
+
+                    if 'product_views' not in CATALOG['stats']:
+                        CATALOG['stats']['product_views'] = {}
+                    if category not in CATALOG['stats']['product_views']:
+                        CATALOG['stats']['product_views'][category] = {}
+
+                    # Mettre à jour les stats pour chaque produit dans la catégorie
+                    for product in products:
+                        if product['name'] not in CATALOG['stats']['product_views'][category]:
+                            CATALOG['stats']['product_views'][category][product['name']] = 0
+                        CATALOG['stats']['product_views'][category][product['name']] += 1
+
+                    save_catalog(CATALOG)
 
     elif query.data.startswith(("next_", "prev_")):
         try:
@@ -3180,34 +3213,34 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
         # Créer les boutons de catégories
         for category in CATALOG.keys():
             if category != 'stats':
-                # Si l'utilisateur est dans des groupes
-                if user_groups:
-                    # Montrer uniquement les catégories correspondant à ses groupes
-                    for group_name in user_groups:
-                        if category.startswith(f"{group_name}_"):
-                            # Enlever le préfixe du groupe pour l'affichage
-                            display_name = category.replace(f"{group_name}_", "")
-                            # Vérifier si la catégorie est en SOLD OUT
-                            is_sold_out = is_category_sold_out(CATALOG[category])
-                            display_text = f"{display_name} {'(SOLD OUT ❌)' if is_sold_out else ''}"
-                            keyboard.append([InlineKeyboardButton(display_text, callback_data=f"view_{category}")])
-                            break
-                # Si l'utilisateur n'est dans aucun groupe
-                else:
-                    # Ne montrer que les catégories publiques (sans préfixe de groupe)
-                    show_category = True
-                    for group_name in admin_features._access_codes.get("groups", {}).keys():
-                        if category.startswith(f"{group_name}_"):
-                            show_category = False
-                            break
-                    if show_category:
-                        # Vérifier si la catégorie est en SOLD OUT
-                        is_sold_out = is_category_sold_out(CATALOG[category])
-                        display_text = f"{category} {'(SOLD OUT ❌)' if is_sold_out else ''}"
-                        keyboard.append([InlineKeyboardButton(display_text, callback_data=f"view_{category}")])
+                # Vérifier si c'est une catégorie de groupe
+                is_group_category = False
+                category_group = None
+                for group_name in admin_features._access_codes.get("groups", {}).keys():
+                    if category.startswith(f"{group_name}_"):
+                        is_group_category = True
+                        category_group = group_name
+                        break
 
-        # Ajouter le bouton retour à l'accueil
+                # Décider si l'utilisateur peut voir cette catégorie
+                show_category = False
+                if is_group_category:
+                    # Pour les catégories de groupe, l'utilisateur doit être membre du groupe
+                    if user_groups and category_group in user_groups:
+                        show_category = True
+                        display_name = category.replace(f"{category_group}_", "")
+                else:
+                    # Les catégories sans préfixe de groupe sont publiques
+                    show_category = True
+                    display_name = category
+
+                if show_category:
+                    is_sold_out = is_category_sold_out(CATALOG[category])
+                    display_text = f"{display_name} {'(SOLD OUT ❌)' if is_sold_out else ''}"
+                    keyboard.append([InlineKeyboardButton(display_text, callback_data=f"view_{category}")])
+
         keyboard.append([InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")])
+
 
         try:
             message = await query.edit_message_text(
@@ -3502,6 +3535,7 @@ def main():
                     CallbackQueryHandler(admin_features.handle_user_management, pattern="^manage_users$"),
                     CallbackQueryHandler(admin_features.select_group_for_user, pattern="^select_group_"),
                     CallbackQueryHandler(admin_features.show_add_user_to_group, pattern="^add_group_user$"),
+                    CallbackQueryHandler(admin_features.select_group_for_category, pattern="^select_group_for_category_"),
                     CallbackQueryHandler(handle_normal_buttons),
                 ],
                 WAITING_CATEGORY_NAME: [
