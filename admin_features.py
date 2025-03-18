@@ -1,4 +1,4 @@
-﻿import json
+import json
 import pytz  
 import asyncio
 from datetime import datetime
