@@ -664,6 +664,49 @@ class AdminFeatures:
 
         return CHOOSING
 
+    async def select_group_for_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la sélection du groupe lors de la création d'une catégorie"""
+        query = update.callback_query
+        await query.answer()
+    
+        _, group_name, category_name = query.data.replace("select_group_for_category_", "").split("_", 2)
+        user_id = update.effective_user.id
+    
+        # Vérifier que l'utilisateur est toujours membre du groupe
+        if user_id not in self._access_codes["groups"].get(group_name, []):
+            await query.edit_message_text(
+                "❌ Vous n'êtes plus membre de ce groupe.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="admin")
+                ]])
+            )
+            return CHOOSING
+        
+        # Créer la catégorie avec le préfixe du groupe
+        full_category_name = f"{group_name}_{category_name}"
+    
+        if full_category_name in CATALOG:
+            await query.edit_message_text(
+                "❌ Cette catégorie existe déjà.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="admin")
+                ]])
+            )
+            return CHOOSING
+        
+        CATALOG[full_category_name] = []
+        save_catalog(CATALOG)
+    
+        await query.edit_message_text(
+            f"✅ Catégorie *{category_name}* créée avec succès dans le groupe *{group_name}*!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Ajouter une autre catégorie", callback_data="add_category")],
+                [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+            ]),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
     async def handle_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère la commande /group"""
         try:
