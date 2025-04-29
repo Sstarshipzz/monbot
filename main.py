@@ -2284,6 +2284,8 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
                 category = query.data.replace("edit_cat_", "")
                 keyboard = [
                     [InlineKeyboardButton("✏️ Modifier le nom", callback_data=f"edit_cat_name_{category}")],
+                    # Nouveau bouton pour la position
+                    [InlineKeyboardButton("🔄 Position du bouton", callback_data=f"edit_cat_position_{category}")],
                     [InlineKeyboardButton("➕ Ajouter SOLD OUT", callback_data=f"add_soldout_{category}")],
                     [InlineKeyboardButton("🔙 Retour", callback_data="edit_category")]
                 ]
@@ -3163,9 +3165,33 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "show_categories":
         keyboard = []
         # Créer uniquement les boutons de catégories
-        for category in CATALOG.keys():
-            if category != 'stats':
-                keyboard.append([InlineKeyboardButton(category, callback_data=f"view_{category}")])
+        categories = [cat for cat in CATALOG.keys() if cat != 'stats' and cat != '_metadata']
+        
+        # Trier les catégories selon leur ordre
+        ordered_categories = []
+        if '_metadata' in CATALOG:
+            # Récupérer les positions sauvegardées
+            positions = {cat: idx for idx, cat in enumerate(categories)}
+            for cat in categories:
+                if cat in CATALOG['_metadata'] and 'order' in CATALOG['_metadata'][cat]:
+                    positions[cat] = CATALOG['_metadata'][cat]['order']
+            # Trier selon les positions
+            ordered_categories = sorted(categories, key=lambda x: positions.get(x, len(categories)))
+        else:
+            ordered_categories = categories
+
+        # Créer les boutons avec les flèches de position
+        for i, category in enumerate(ordered_categories):
+            row = []
+            row.append(InlineKeyboardButton(category, callback_data=f"view_{category}"))
+            
+            # Ajouter les flèches haut/bas sauf pour le premier/dernier
+            if i > 0:  # Pas le premier
+                row.append(InlineKeyboardButton("⬆️", callback_data=f"move_cat_up_{category}"))
+            if i < len(ordered_categories) - 1:  # Pas le dernier
+                row.append(InlineKeyboardButton("⬇️", callback_data=f"move_cat_down_{category}"))
+                
+            keyboard.append(row)
 
         # Ajouter uniquement le bouton retour à l'accueil
         keyboard.append([InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")])
@@ -3173,23 +3199,24 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             message = await query.edit_message_text(
                 "📋 *Menu*\n\n"
-                "Choisissez une catégorie pour voir les produits :",
+                "Choisissez une catégorie pour voir les produits :\n"
+                "Utilisez ⬆️ et ⬇️ pour réorganiser les catégories",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
             context.user_data['menu_message_id'] = message.message_id
         except Exception as e:
             print(f"Erreur lors de la mise à jour du message des catégories: {e}")
-            # Si la mise à jour échoue, recréez le message
             message = await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="📋 *Menu*\n\n"
-                     "Choisissez une catégorie pour voir les produits :",
+                     "Choisissez une catégorie pour voir les produits :\n"
+                     "Utilisez ⬆️ et ⬇️ pour réorganiser les catégories",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
             context.user_data['menu_message_id'] = message.message_id
-
+            
     elif query.data == "back_to_home":  
             chat_id = update.effective_chat.id
 
@@ -3230,7 +3257,124 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode='HTML'  
             )
             return CHOOSING
+            
+async def handle_category_position(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    category = query.data.replace("edit_cat_position_", "")
+    
+    # Récupérer la position actuelle depuis la metadata
+    if '_metadata' not in CATALOG:
+        CATALOG['_metadata'] = {}
+    if category not in CATALOG['_metadata']:
+        CATALOG['_metadata'][category] = {}
+        
+    current_position = CATALOG['_metadata'].get(category, {}).get('position', 'bottom')
+    
+    keyboard = [
+        [InlineKeyboardButton("⬆️ Haut", callback_data=f"set_cat_pos_{category}_top")],
+        [InlineKeyboardButton("⬇️ Bas", callback_data=f"set_cat_pos_{category}_bottom")],
+        [InlineKeyboardButton("🔙 Retour", callback_data=f"edit_cat_{category}")]
+    ]
+    
+    position_text = "Haut ⬆️" if current_position == 'top' else "Bas ⬇️"
+    
+    await query.edit_message_text(
+        f"🔄 *Position du bouton pour {category}*\n\n"
+        f"Position actuelle : {position_text}\n\n"
+        "Choisissez la nouvelle position :",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return CHOOSING
 
+async def set_category_position(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data.replace("set_cat_pos_", "")
+    category, position = data.rsplit("_", 1)
+    
+    # Mettre à jour la position dans la metadata
+    if '_metadata' not in CATALOG:
+        CATALOG['_metadata'] = {}
+    if category not in CATALOG['_metadata']:
+        CATALOG['_metadata'][category] = {}
+        
+    CATALOG['_metadata'][category]['position'] = position
+    save_catalog(CATALOG)
+    
+    position_text = "Haut ⬆️" if position == 'top' else "Bas ⬇️"
+    await query.edit_message_text(
+        f"✅ Position modifiée avec succès !\n\n"
+        f"La catégorie *{category}* est maintenant en : {position_text}",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Retour", callback_data=f"edit_cat_{category}")
+        ]])
+    )
+    
+    # Attendre 2 secondes avant de revenir au menu d'édition
+    await asyncio.sleep(2)
+    return await handle_normal_buttons(update, context)
+
+async def move_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    
+    # Extraire la direction et la catégorie
+    if data.startswith("move_cat_up_"):
+        direction = "up"
+        category = data.replace("move_cat_up_", "")
+    else:
+        direction = "down"
+        category = data.replace("move_cat_down_", "")
+    
+    # Initialiser metadata si nécessaire
+    if '_metadata' not in CATALOG:
+        CATALOG['_metadata'] = {}
+    
+    # Récupérer toutes les catégories sauf stats et metadata
+    categories = [cat for cat in CATALOG.keys() if cat != 'stats' and cat != '_metadata']
+    
+    # Récupérer les positions actuelles
+    positions = {}
+    for cat in categories:
+        if cat in CATALOG['_metadata'] and 'order' in CATALOG['_metadata'][cat]:
+            positions[cat] = CATALOG['_metadata'][cat]['order']
+        else:
+            positions[cat] = len(categories)  # Position par défaut à la fin
+    
+    # Trier les catégories selon leur position
+    ordered_categories = sorted(categories, key=lambda x: positions.get(x, len(categories)))
+    
+    # Trouver l'index actuel de la catégorie
+    current_index = ordered_categories.index(category)
+    
+    # Calculer le nouvel index
+    if direction == "up" and current_index > 0:
+        new_index = current_index - 1
+    elif direction == "down" and current_index < len(ordered_categories) - 1:
+        new_index = current_index + 1
+    else:
+        await query.answer("Impossible de déplacer dans cette direction")
+        return
+    
+    # Échanger les positions
+    ordered_categories[current_index], ordered_categories[new_index] = \
+        ordered_categories[new_index], ordered_categories[current_index]
+    
+    # Mettre à jour les positions dans metadata
+    for i, cat in enumerate(ordered_categories):
+        if cat not in CATALOG['_metadata']:
+            CATALOG['_metadata'][cat] = {}
+        CATALOG['_metadata'][cat]['order'] = i
+    
+    # Sauvegarder le catalogue
+    save_catalog(CATALOG)
+    
+    # Simuler un "show_categories" pour rafraîchir l'affichage
+    query.data = "show_categories"
+    await query.answer()
+    await show_categories(update, context)
+    
 async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler temporaire pour obtenir le file_id de l'image banner"""
     if update.message.photo:
@@ -3413,6 +3557,9 @@ def main():
                     CallbackQueryHandler(admin_features.toggle_codes_view, pattern="^show_(active|used)_codes$"),
                     CallbackQueryHandler(admin_features.show_codes_history, pattern="^refresh_codes$"),
                     CallbackQueryHandler(admin_features.handle_codes_pagination, pattern="^(prev|next)_codes_page$"),
+                    CallbackQueryHandler(handle_category_position, pattern="^edit_cat_position_"),
+                    CallbackQueryHandler(set_category_position, pattern="^set_cat_pos_"),
+                    CallbackQueryHandler(move_category, pattern="^move_cat_(up|down)_"),
                     CallbackQueryHandler(handle_normal_buttons),
                 ],
                 WAITING_CODE_NUMBER: [
