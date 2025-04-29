@@ -1444,7 +1444,61 @@ async def finish_product_media(update: Update, context: ContextTypes.DEFAULT_TYP
     creation_key = f"admin_{admin_id}"
     
     try:
-        if creation_key in ADMIN_CREATIONS:
+        # Mode édition
+        if 'editing_category' in context.user_data and 'editing_product' in context.user_data:
+            category = context.user_data['editing_category']
+            product_name = context.user_data['editing_product']
+            
+            # Mettre à jour les médias du produit existant
+            for product in CATALOG[category]:
+                if product['name'] == product_name:
+                    product['media'] = context.user_data.get('temp_product_media', [])
+                    break
+            
+            save_catalog(CATALOG)
+            context.user_data.clear()
+            
+            # Afficher le menu admin avec message de succès
+            is_enabled = access_manager.is_access_code_enabled()
+            status_text = "✅ Activé" if is_enabled else "❌ Désactivé"
+            info_status = "✅ Activé" if CONFIG.get('info_button_enabled', True) else "❌ Désactivé"
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ Ajouter une catégorie", callback_data="add_category")],
+                [InlineKeyboardButton("➕ Ajouter un produit", callback_data="add_product")],
+                [InlineKeyboardButton("❌ Supprimer une catégorie", callback_data="delete_category")],
+                [InlineKeyboardButton("❌ Supprimer un produit", callback_data="delete_product")],
+                [InlineKeyboardButton("✏️ Modifier une catégorie", callback_data="edit_category")],
+                [InlineKeyboardButton("✏️ Modifier un produit", callback_data="edit_product")],
+                [InlineKeyboardButton("🎯 Gérer boutons accueil", callback_data="show_custom_buttons")],
+                [InlineKeyboardButton(f"🔒 Code d'accès: {status_text}", callback_data="toggle_access_code")],
+                [InlineKeyboardButton("📊 Statistiques", callback_data="show_stats")],
+                [InlineKeyboardButton("🛒 Modifier bouton Commander", callback_data="edit_order_button")],
+                [InlineKeyboardButton("🏠 Modifier message d'accueil", callback_data="edit_welcome")],  
+                [InlineKeyboardButton("🖼️ Modifier image bannière", callback_data="edit_banner_image")],
+                [InlineKeyboardButton("📢 Gestion annonces", callback_data="manage_broadcasts")],
+                [InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")],
+            ]
+            
+            try:
+                await query.message.delete()
+            except:
+                pass
+
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ Médias mis à jour avec succès !\n\n"
+                     "🔧 *Menu d'administration*\n\n"
+                     "Sélectionnez une action à effectuer :",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            
+            context.user_data['menu_message_id'] = message.message_id
+            return CHOOSING
+            
+        # Mode création (code existant inchangé)
+        elif creation_key in ADMIN_CREATIONS:
             category = ADMIN_CREATIONS[creation_key]['category']
             new_product = {
                 'name': ADMIN_CREATIONS[creation_key]['name'],
@@ -1458,7 +1512,6 @@ async def finish_product_media(update: Update, context: ContextTypes.DEFAULT_TYP
             CATALOG[category].append(new_product)
             save_catalog(CATALOG)
             
-            # Nettoyer les données temporaires
             if creation_key in ADMIN_CREATIONS:
                 del ADMIN_CREATIONS[creation_key]
             context.user_data.clear()
@@ -1504,8 +1557,7 @@ async def finish_product_media(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         print(f"Erreur dans finish_product_media: {e}")
         return await show_admin_menu(update, context)
-
-
+        
 async def handle_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère la nouvelle valeur pour le champ en cours de modification"""
     category = context.user_data.get('editing_category')
