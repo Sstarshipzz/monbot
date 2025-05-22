@@ -35,6 +35,14 @@ class AdminFeatures:
             print(f"Erreur lors du chargement des admin IDs : {e}")
             return []
 
+    def is_access_control_enabled(self) -> bool:
+        """Vérifie si le contrôle d'accès est activé"""
+        self._access_codes = self._load_access_codes()
+        # Vérifie la clé "is_enabled" au lieu de "enabled"
+        enabled = self._access_codes.get("is_enabled", True)
+        print(f"Access control check - Enabled: {enabled}")
+        return enabled
+
     def _load_access_codes(self):
         """Charge les codes d'accès depuis le fichier"""
         try:
@@ -255,6 +263,56 @@ class AdminFeatures:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return self.STATES['CHOOSING']
+
+    async def check_and_clean_unauthorized_access(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """
+        Vérifie si l'utilisateur est autorisé lorsque le contrôle d'accès est activé
+        Si non autorisé : supprime les messages et retourne True
+        Si autorisé : retourne False
+        """
+        if self.is_access_control_enabled() and not self.is_user_authorized(update.effective_user.id):
+            chat_id = update.effective_chat.id
+        
+            message_keys = [
+                'menu_message_id', 
+                'banner_message_id',
+                'category_message_id',
+                'last_product_message_id',
+                'instruction_message_id'
+            ]
+
+            for key in message_keys:
+                if key in context.user_data:
+                    try:
+                        await context.bot.delete_message(
+                            chat_id=chat_id,
+                            message_id=context.user_data[key]
+                        )
+                    except Exception as e:
+                        print(f"Error deleting message {key}: {e}")
+                    del context.user_data[key]
+
+            if update.callback_query and update.callback_query.message:
+                try:
+                    await update.callback_query.message.delete()
+                except Exception as e:
+                    print(f"Error deleting callback message: {e}")
+
+            warning_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔒 Accès non autorisé. Le contrôle d'accès est activé.\nVeuillez utiliser /start et entrez votre code d'accès'."
+            )
+
+            async def delete_warning():
+                await asyncio.sleep(3)
+                try:
+                    await warning_msg.delete()
+                except Exception as e:
+                    print(f"Error deleting warning message: {e}")
+
+            asyncio.create_task(delete_warning())
+            return True
+        return False
 
     async def handle_custom_code_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère la demande de nombre personnalisé de codes"""
@@ -863,9 +921,10 @@ class AdminFeatures:
 
             # Pour les utilisateurs qui n'ont pas reçu le message
             for user_id in self._users.keys():
+                user_id_int = int(user_id)
                 if (str(user_id) not in messages_updated and 
-                    self.is_user_authorized(int(user_id)) and 
-                    int(user_id) != admin_id):  # Skip l'admin
+                    user_id_int != admin_id and
+                    (not self.is_access_control_enabled() or self.is_user_authorized(user_id_int))):
                     try:
                         sent_msg = await context.bot.send_message(
                             chat_id=user_id,
@@ -951,7 +1010,7 @@ class AdminFeatures:
 
         for user_id in self._users.keys():
             user_id_int = int(user_id)
-            if not self.is_user_authorized(user_id_int):
+            if self.is_access_control_enabled() and not self.is_user_authorized(user_id_int):
                 print(f"User {user_id_int} not authorized")
                 continue
         
@@ -961,7 +1020,7 @@ class AdminFeatures:
                         chat_id=user_id,
                         photo=broadcast['file_id'],
                         caption=broadcast['caption'] if broadcast['caption'] else '',
-                        parse_mode='Markdown',  # Ajout du parse_mode
+                        parse_mode='Markdown', 
                         reply_markup=self._create_message_keyboard()
                     )
                 else:
@@ -973,7 +1032,7 @@ class AdminFeatures:
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=message_text,
-                        parse_mode='Markdown',  # Ajout du parse_mode
+                        parse_mode='Markdown', 
                         reply_markup=self._create_message_keyboard()
                     )
                 success += 1
@@ -1070,11 +1129,16 @@ class AdminFeatures:
                 parse_mode='HTML'
             )
 
-            # Envoi aux utilisateurs autorisés
             for user_id in self._users.keys():
                 user_id_int = int(user_id)
-                if not self.is_user_authorized(user_id_int) or user_id_int == update.effective_user.id:  # Skip non-autorisés et admin
-                    print(f"User {user_id_int} skipped")
+    
+                # Skip uniquement l'admin OU les non-autorisés si le contrôle est activé
+                if user_id_int == update.effective_user.id:  # Skip toujours l'admin
+                    print(f"Admin {user_id_int} skipped")
+                    continue
+        
+                if self.is_access_control_enabled() and not self.is_user_authorized(user_id_int):
+                    print(f"Unauthorized user {user_id_int} skipped (access control enabled)")
                     continue
             
                 try:
