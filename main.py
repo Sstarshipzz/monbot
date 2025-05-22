@@ -70,6 +70,22 @@ def save_catalog(catalog):
     with open(CONFIG['catalog_file'], 'w', encoding='utf-8') as f:
         json.dump(catalog, f, indent=4, ensure_ascii=False)
 
+def sanitize_product_data(text):
+    """Nettoie et encode correctement le texte pour le stockage"""
+    if text:
+        # Encodage en base64 pour préserver tous les caractères
+        return base64.b64encode(text.encode('utf-8')).decode('utf-8')
+    return text
+
+def desanitize_product_data(text):
+    """Décode le texte stocké"""
+    if text:
+        try:
+            return base64.b64decode(text.encode('utf-8')).decode('utf-8')
+        except:
+            return text
+    return text
+
 def clean_stats():
     """Nettoie les statistiques des produits et catégories qui n'existent plus"""
     if 'stats' not in CATALOG:
@@ -469,6 +485,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['menu_message_id'] = menu_message.message_id
     
+    return CHOOSING
+
+async def show_networks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Affiche tous les réseaux sociaux"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [
+            InlineKeyboardButton("📞 Whatsapp", url="https://wa.me/+33628712360")
+        ],
+
+        [
+            InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/pops.coffe/")
+        ],
+
+        [
+            InlineKeyboardButton("🔵 Canal telegram", url="https://t.me/+C4aWmlUzjrE5Mzhk")
+        ],
+
+
+        [InlineKeyboardButton("🔙 Retour", callback_data="back_to_home")]
+    ]
+
+    await query.edit_message_text(
+        "🌐 Voici nos réseaux :",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return CHOOSING
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1220,7 +1264,7 @@ async def handle_product_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         creation_key = f"admin_{admin_id}"
         ADMIN_CREATIONS[creation_key] = {
             'category': category,
-            'name': product_name,
+            'name': sanitize_product_data(product_name),
             'status': 'name_added',
             'timestamp': datetime.now().isoformat()
         }
@@ -1414,26 +1458,8 @@ async def finish_product_media(update: Update, context: ContextTypes.DEFAULT_TYP
     creation_key = f"admin_{admin_id}"
     
     try:
-        # Cas 1: Ajout d'un nouveau produit
-        if creation_key in ADMIN_CREATIONS:
-            category = ADMIN_CREATIONS[creation_key]['category']
-            new_product = {
-                'name': ADMIN_CREATIONS[creation_key]['name'],
-                'price': ADMIN_CREATIONS[creation_key]['price'],
-                'description': ADMIN_CREATIONS[creation_key]['description'],
-                'media': context.user_data.get('temp_product_media', [])
-            }
-            
-            if category not in CATALOG:
-                CATALOG[category] = []
-            CATALOG[category].append(new_product)
-            
-            # Nettoyer les données temporaires
-            if creation_key in ADMIN_CREATIONS:
-                del ADMIN_CREATIONS[creation_key]
-                
-        # Cas 2: Modification d'un produit existant
-        elif 'editing_category' in context.user_data and 'editing_product' in context.user_data:
+        # Mode édition
+        if 'editing_category' in context.user_data and 'editing_product' in context.user_data:
             category = context.user_data['editing_category']
             product_name = context.user_data['editing_product']
             
@@ -1442,55 +1468,110 @@ async def finish_product_media(update: Update, context: ContextTypes.DEFAULT_TYP
                 if product['name'] == product_name:
                     product['media'] = context.user_data.get('temp_product_media', [])
                     break
-        
-        # Sauvegarder les modifications dans les deux cas
-        save_catalog(CATALOG)
-        
-        # Nettoyer les données temporaires
-        context.user_data.clear()
-        
-        # Retourner au menu admin
-        is_enabled = access_manager.is_access_code_enabled()
-        status_text = "✅ Activé" if is_enabled else "❌ Désactivé"
-        
-        keyboard = [
-            [InlineKeyboardButton("➕ Ajouter une catégorie", callback_data="add_category")],
-            [InlineKeyboardButton("➕ Ajouter un produit", callback_data="add_product")],
-            [InlineKeyboardButton("❌ Supprimer une catégorie", callback_data="delete_category")],
-            [InlineKeyboardButton("❌ Supprimer un produit", callback_data="delete_product")],
-            [InlineKeyboardButton("✏️ Modifier une catégorie", callback_data="edit_category")],
-            [InlineKeyboardButton("✏️ Modifier un produit", callback_data="edit_product")],
-            [InlineKeyboardButton("🎯 Gérer boutons accueil", callback_data="show_custom_buttons")],
-            [InlineKeyboardButton(f"🔒 Code d'accès: {status_text}", callback_data="toggle_access_code")],
-            [InlineKeyboardButton("📊 Statistiques", callback_data="show_stats")],
-            [InlineKeyboardButton("🛒 Modifier bouton Commander", callback_data="edit_order_button")],
-            [InlineKeyboardButton("🏠 Modifier message d'accueil", callback_data="edit_welcome")],
-            [InlineKeyboardButton("🖼️ Modifier image bannière", callback_data="edit_banner_image")],
-            [InlineKeyboardButton("📢 Gestion annonces", callback_data="manage_broadcasts")],
-            [InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")]
-        ]
-        
-        try:
-            await query.message.delete()
-        except:
-            pass
+            
+            save_catalog(CATALOG)
+            context.user_data.clear()
+            
+            # Afficher le menu admin avec message de succès
+            is_enabled = access_manager.is_access_code_enabled()
+            status_text = "✅ Activé" if is_enabled else "❌ Désactivé"
+            info_status = "✅ Activé" if CONFIG.get('info_button_enabled', True) else "❌ Désactivé"
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ Ajouter une catégorie", callback_data="add_category")],
+                [InlineKeyboardButton("➕ Ajouter un produit", callback_data="add_product")],
+                [InlineKeyboardButton("❌ Supprimer une catégorie", callback_data="delete_category")],
+                [InlineKeyboardButton("❌ Supprimer un produit", callback_data="delete_product")],
+                [InlineKeyboardButton("✏️ Modifier une catégorie", callback_data="edit_category")],
+                [InlineKeyboardButton("✏️ Modifier un produit", callback_data="edit_product")],
+                [InlineKeyboardButton("🎯 Gérer boutons accueil", callback_data="show_custom_buttons")],
+                [InlineKeyboardButton(f"🔒 Code d'accès: {status_text}", callback_data="toggle_access_code")],
+                [InlineKeyboardButton("📊 Statistiques", callback_data="show_stats")],
+                [InlineKeyboardButton("🛒 Modifier bouton Commander", callback_data="edit_order_button")],
+                [InlineKeyboardButton("🏠 Modifier message d'accueil", callback_data="edit_welcome")],  
+                [InlineKeyboardButton("🖼️ Modifier image bannière", callback_data="edit_banner_image")],
+                [InlineKeyboardButton("📢 Gestion annonces", callback_data="manage_broadcasts")],
+                [InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")],
+            ]
+            
+            try:
+                await query.message.delete()
+            except:
+                pass
 
-        message = await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="✅ Modifications enregistrées avec succès !\n\n"
-                 "🔧 *Menu d'administration*\n\n"
-                 "Sélectionnez une action à effectuer :",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-        
-        context.user_data['menu_message_id'] = message.message_id
-        return CHOOSING
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ Médias mis à jour avec succès !\n\n"
+                     "🔧 *Menu d'administration*\n\n"
+                     "Sélectionnez une action à effectuer :",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            
+            context.user_data['menu_message_id'] = message.message_id
+            return CHOOSING
+            
+        # Mode création (code existant inchangé)
+        elif creation_key in ADMIN_CREATIONS:
+            category = ADMIN_CREATIONS[creation_key]['category']
+            new_product = {
+                'name': desanitize_product_data(ADMIN_CREATIONS[creation_key]['name']),
+                'price': ADMIN_CREATIONS[creation_key]['price'],
+                'description': ADMIN_CREATIONS[creation_key]['description'],
+                'media': context.user_data.get('temp_product_media', [])
+            }
+            
+            if category not in CATALOG:
+                CATALOG[category] = []
+            CATALOG[category].append(new_product)
+            save_catalog(CATALOG)
+            
+            if creation_key in ADMIN_CREATIONS:
+                del ADMIN_CREATIONS[creation_key]
+            context.user_data.clear()
+            
+            is_enabled = access_manager.is_access_code_enabled()
+            status_text = "✅ Activé" if is_enabled else "❌ Désactivé"
+            info_status = "✅ Activé" if CONFIG.get('info_button_enabled', True) else "❌ Désactivé"
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ Ajouter une catégorie", callback_data="add_category")],
+                [InlineKeyboardButton("➕ Ajouter un produit", callback_data="add_product")],
+                [InlineKeyboardButton("❌ Supprimer une catégorie", callback_data="delete_category")],
+                [InlineKeyboardButton("❌ Supprimer un produit", callback_data="delete_product")],
+                [InlineKeyboardButton("✏️ Modifier une catégorie", callback_data="edit_category")],
+                [InlineKeyboardButton("✏️ Modifier un produit", callback_data="edit_product")],
+                [InlineKeyboardButton("🎯 Gérer boutons accueil", callback_data="show_custom_buttons")],
+                [InlineKeyboardButton(f"🔒 Code d'accès: {status_text}", callback_data="toggle_access_code")],
+                [InlineKeyboardButton("📊 Statistiques", callback_data="show_stats")],
+                [InlineKeyboardButton("🛒 Modifier bouton Commander", callback_data="edit_order_button")],
+                [InlineKeyboardButton("🏠 Modifier message d'accueil", callback_data="edit_welcome")],  
+                [InlineKeyboardButton("🖼️ Modifier image bannière", callback_data="edit_banner_image")],
+                [InlineKeyboardButton("📢 Gestion annonces", callback_data="manage_broadcasts")],
+                [InlineKeyboardButton("🔙 Retour à l'accueil", callback_data="back_to_home")],
+            ]
+            
+            try:
+                await query.message.delete()
+            except:
+                pass
+
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ Produit ajouté avec succès !\n\n"
+                     "🔧 *Menu d'administration*\n\n"
+                     "Sélectionnez une action à effectuer :",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            
+            context.user_data['menu_message_id'] = message.message_id
+            return CHOOSING
             
     except Exception as e:
         print(f"Erreur dans finish_product_media: {e}")
         return await show_admin_menu(update, context)
-
+        
 async def handle_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère la nouvelle valeur pour le champ en cours de modification"""
     category = context.user_data.get('editing_category')
@@ -2636,8 +2717,8 @@ async def handle_normal_buttons(update: Update, context: ContextTypes.DEFAULT_TY
 
                     if total_media > 1:
                         keyboard.append([
-                            InlineKeyboardButton("⬅️ Vidéo précédente", callback_data=f"prev_{nav_id}"),
-                            InlineKeyboardButton("Vidéo suivante ➡️", callback_data=f"next_{nav_id}")
+                            InlineKeyboardButton("⬅️ Média précédent", callback_data=f"prev_{nav_id}"),
+                            InlineKeyboardButton("Média suivant ➡️", callback_data=f"next_{nav_id}")
                         ])
 
                 # Navigation entre produits (en deuxième)
@@ -3221,77 +3302,61 @@ async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
         CONFIG['banner_image'] = file_id
-        # Sauvegarder dans config.json
+
         with open('config.json', 'w', encoding='utf-8') as f:
             json.dump(CONFIG, f, indent=4)
         await update.message.reply_text(
             f"✅ Image banner enregistrée!\nFile ID: {file_id}"
         )
 
-
-    # Récupérer le chat_id et le message
     if update.callback_query:
         chat_id = update.callback_query.message.chat_id
     else:
         chat_id = update.effective_chat.id
 
-    # Nouveau clavier simplifié pour l'accueil
     keyboard = [
         [InlineKeyboardButton("📋 MENU", callback_data="show_categories")]
     ]
 
-    # Ajouter le bouton admin si l'utilisateur est administrateur
     if str(update.effective_user.id) in ADMIN_IDS:
         keyboard.append([InlineKeyboardButton("🔧 Menu Admin", callback_data="admin")])
 
-    # Configurer le bouton de contact en fonction du type (URL ou username)
     contact_button = None
     if CONFIG.get('contact_url'):
         contact_button = InlineKeyboardButton("📞 Contact", url=CONFIG['contact_url'])
     elif CONFIG.get('contact_username'):
         contact_button = InlineKeyboardButton("📞 Contact Telegram", url=f"https://t.me/{CONFIG['contact_username']}")
 
-    # Ajouter les boutons de contact et canaux
     if contact_button:
         keyboard.extend([
             [
-                contact_button,
-                InlineKeyboardButton("💭 Canal telegram", url="https://t.me/+aHbA9_8tdTQwYThk")
+                InlineKeyboardButton("🔵 Canal telegram", url="https://t.me/+C4aWmlUzjrE5Mzhk"),
+                InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/pops.coffe/")
             ],
             [
-                InlineKeyboardButton("🥔 Contact potato", url="https://dlj199.org/christianDry547"),
-                InlineKeyboardButton("📱 Instagram", url="https://www.instagram.com/christiandry.54?igsh=MWU1dXNrbXdpMzllNA%3D%3D&utm_source=qr")
-            ],
-            [
-                InlineKeyboardButton("🌐 Signal", url="https://signal.group/#CjQKIJNEETZNr9_LRMvShQbblk_NUdDyabA7e_eyUQY6-ptsEhBSpXex0cjIoOEYQ4H3D8K5"),
-                InlineKeyboardButton("👻 Snapchat", url="https://snapchat.com/t/0HumwTKi")
+                InlineKeyboardButton("📞 Whatsapp", url="https://wa.me/+33628712360")
             ]
         ])
     else:
         keyboard.extend([
             [
-                InlineKeyboardButton("💭 Canal telegram", url="https://t.me/+aHbA9_8tdTQwYThk"),
-                InlineKeyboardButton("🥔 Contact potato", url="https://dlj199.org/christianDry547")
+                InlineKeyboardButton("🔵 Canal telegram", url="https://t.me/+C4aWmlUzjrE5Mzhk"),
+                InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/pops.coffe/")
             ],
             [
-                InlineKeyboardButton("📱 Instagram", url="https://www.instagram.com/christiandry.54?igsh=MWU1dXNrbXdpMzllNA%3D%3D&utm_source=qr"),
-                InlineKeyboardButton("🌐 Signal", url="https://signal.group/#CjQKIJNEETZNr9_LRMvShQbblk_NUdDyabA7e_eyUQY6-ptsEhBSpXex0cjIoOEYQ4H3D8K5")
-            ],
-            [
-                InlineKeyboardButton("👻 Snapchat", url="https://snapchat.com/t/0HumwTKi")
+                InlineKeyboardButton("📞 Whatsapp", url="https://wa.me/+33628712360")
             ]
         ])
 
     try:
         if update.callback_query:
-            # Si c'est un callback, on édite le message existant
+
             await update.callback_query.edit_message_text(
                 text=welcome_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
         else:
-            # Sinon, on envoie un nouveau message
             menu_message = await context.bot.send_message(
                 chat_id=chat_id,
                 text=welcome_text,
@@ -3302,7 +3367,6 @@ async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Erreur lors du retour à l'accueil: {e}")
-        # En cas d'erreur, on essaie d'envoyer un nouveau message
         try:
             menu_message = await context.bot.send_message(
                 chat_id=chat_id,
