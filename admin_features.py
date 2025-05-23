@@ -1,47 +1,58 @@
 import json
 import pytz  
-import asyncio
-import string
 import random
-from datetime import datetime, timedelta 
+import string
+import asyncio
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest as TelegramBadRequest
 
+WAITING_FOR_ACCESS_CODE = "WAITING_FOR_ACCESS_CODE"
+CHOOSING = "CHOOSING"
+WAITING_CATEGORY_NAME = "WAITING_CATEGORY_NAME"
+WAITING_PRODUCT_NAME = "WAITING_PRODUCT_NAME"
+WAITING_PRODUCT_PRICE = "WAITING_PRODUCT_PRICE"
+WAITING_PRODUCT_DESCRIPTION = "WAITING_PRODUCT_DESCRIPTION"
+WAITING_PRODUCT_MEDIA = "WAITING_PRODUCT_MEDIA"
+SELECTING_CATEGORY = "SELECTING_CATEGORY"
+SELECTING_CATEGORY_TO_DELETE = "SELECTING_CATEGORY_TO_DELETE"
+SELECTING_PRODUCT_TO_DELETE = "SELECTING_PRODUCT_TO_DELETE"
+WAITING_CONTACT_USERNAME = "WAITING_CONTACT_USERNAME"
+SELECTING_PRODUCT_TO_EDIT = "SELECTING_PRODUCT_TO_EDIT"
+EDITING_PRODUCT_FIELD = "EDITING_PRODUCT_FIELD"
+WAITING_NEW_VALUE = "WAITING_NEW_VALUE"
+WAITING_BANNER_IMAGE = "WAITING_BANNER_IMAGE"
+WAITING_BROADCAST_MESSAGE = "WAITING_BROADCAST_MESSAGE"
+WAITING_ORDER_BUTTON_CONFIG = "WAITING_ORDER_BUTTON_CONFIG"
+WAITING_WELCOME_MESSAGE = "WAITING_WELCOME_MESSAGE"
+EDITING_CATEGORY = "EDITING_CATEGORY"
+WAITING_NEW_CATEGORY_NAME = "WAITING_NEW_CATEGORY_NAME"
+WAITING_BUTTON_NAME = "WAITING_BUTTON_NAME"
+WAITING_BUTTON_VALUE = "WAITING_BUTTON_VALUE"
+WAITING_BROADCAST_EDIT = "WAITING_BROADCAST_EDIT"
+WAITING_GROUP_NAME = "WAITING_GROUP_NAME"
+WAITING_GROUP_USER = "WAITING_GROUP_USER"
+WAITING_CODE_NUMBER = "WAITING_CODE_NUMBER"
 
 class AdminFeatures:
     STATES = {
         'CHOOSING': 'CHOOSING',
         'WAITING_CODE_NUMBER': 'WAITING_CODE_NUMBER'
     }
-    def __init__(self, users_file: str = 'data/users.json', access_codes_file: str = 'data/access_codes.json', broadcasts_file: str = 'data/broadcasts.json', config_file: str = 'config/config.json'):  # Ajout du paramètre config_file
+    def __init__(self, users_file: str = 'data/users.json', access_codes_file: str = 'data/access_codes.json', broadcasts_file: str = 'data/broadcasts.json', config_file: str = 'config/config.json'):
+        from main import CATALOG, save_catalog  
+        self.CATALOG = CATALOG
+        self.save_catalog = save_catalog
         self.users_file = users_file
         self.access_codes_file = access_codes_file
         self.broadcasts_file = broadcasts_file
-        self.config_file = config_file  
+        self.config_file = config_file
         self._users = self._load_users()
+        self.admin_ids = self._load_admin_ids()
         self._access_codes = self._load_access_codes()
         self.broadcasts = self._load_broadcasts()
-        self.admin_ids = self._load_admin_ids()
-        self.cleanup_expired_codes() 
-
-    def _load_admin_ids(self) -> list:
-        """Charge les IDs admin depuis le fichier de configuration"""
-        try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return config.get('admin_ids', [])
-        except Exception as e:
-            print(f"Erreur lors du chargement des admin IDs : {e}")
-            return []
-
-    def is_access_control_enabled(self) -> bool:
-        """Vérifie si le contrôle d'accès est activé"""
-        self._access_codes = self._load_access_codes()
-        # Vérifie la clé "is_enabled" au lieu de "enabled"
-        enabled = self._access_codes.get("is_enabled", True)
-        print(f"Access control check - Enabled: {enabled}")
-        return enabled
+        self.polls_file = 'data/polls.json'
+        self.polls = self._load_polls()
 
     def _load_access_codes(self):
         """Charge les codes d'accès depuis le fichier"""
@@ -59,83 +70,15 @@ class AdminFeatures:
             print(f"Unexpected error loading access codes: {e}")
             return {"authorized_users": []}
 
-    def is_user_authorized(self, user_id: int) -> bool:
-        """Vérifie si l'utilisateur est autorisé"""
-        # Recharger les codes d'accès à chaque vérification
-        self._access_codes = self._load_access_codes()
-        
-        # Convertir l'ID en nombre et vérifier sa présence
-        return int(user_id) in self._access_codes.get("authorized_users", [])
-
-    def is_user_banned(self, user_id: int) -> bool:
-        """Vérifie si l'utilisateur est banni"""
-        self._access_codes = self._load_access_codes()
-        return int(user_id) in self._access_codes.get("banned_users", [])
-
-    def reload_access_codes(self):
-        """Recharge les codes d'accès depuis le fichier"""
-        self._access_codes = self._load_access_codes()
-        return self._access_codes.get("authorized_users", [])
-
-    def _load_users(self):
-        """Charge les utilisateurs depuis le fichier"""
+    def _load_admin_ids(self) -> list:
+        """Charge les IDs admin depuis le fichier de configuration"""
         try:
-            with open(self.users_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
-
-    def _save_users(self):
-        """Sauvegarde les utilisateurs"""
-        try:
-            with open(self.users_file, 'w', encoding='utf-8') as f:
-                json.dump(self._users, f, indent=4, ensure_ascii=False)
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config.get('admin_ids', [])
         except Exception as e:
-            print(f"Erreur lors de la sauvegarde des utilisateurs : {e}")
-
-    def _create_message_keyboard(self):
-        """Crée le clavier standard pour les messages"""
-        return InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Menu Principal", callback_data="start_cmd")
-        ]])
-
-    def _load_broadcasts(self):
-        """Charge les broadcasts depuis le fichier"""
-        try:
-            with open(self.broadcasts_file, 'r', encoding='utf-8') as f:
-                broadcasts = json.load(f)
-                # Vérifier et corriger la structure de chaque broadcast
-                for broadcast_id, broadcast in broadcasts.items():
-                    if 'message_ids' not in broadcast:
-                        broadcast['message_ids'] = {}
-                    # Assurer que les user_ids sont des strings
-                    if 'message_ids' in broadcast:
-                        broadcast['message_ids'] = {
-                            str(user_id): msg_id 
-                            for user_id, msg_id in broadcast['message_ids'].items()
-                        }
-                return broadcasts
-        except FileNotFoundError:
-            return {}
-        except json.JSONDecodeError:
-            print("Erreur de décodage JSON, création d'un nouveau fichier broadcasts")
-            return {}
-
-    def _save_broadcasts(self):
-        """Sauvegarde les broadcasts"""
-        try:
-            with open(self.broadcasts_file, 'w', encoding='utf-8') as f:
-                json.dump(self.broadcasts, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            print(f"Erreur lors de la sauvegarde des broadcasts : {e}")
-
-    def _save_access_codes(self):
-        """Sauvegarde les codes d'accès"""
-        try:
-            with open(self.access_codes_file, 'w', encoding='utf-8') as f:
-                json.dump(self._access_codes, f, indent=4)
-        except Exception as e:
-            print(f"Erreur lors de la sauvegarde des codes d'accès : {e}")
+            print(f"Erreur lors du chargement des admin IDs : {e}")
+            return []
 
     def authorize_user(self, user_id: int) -> bool:
         """Ajoute un utilisateur à la liste des utilisateurs autorisés"""
@@ -169,6 +112,22 @@ class AdminFeatures:
             return False
         except Exception as e:
             print(f"Erreur lors du marquage du code comme utilisé : {e}")
+            return False
+
+    def is_user_authorized(self, user_id: int) -> bool:
+        """Vérifie si un utilisateur est autorisé"""
+        try:
+            # Convertir en int si c'est un string
+            user_id = int(user_id)
+            
+            # Vérifier si l'utilisateur est banni
+            if self.is_user_banned(user_id):
+                return False
+                
+            # Vérifier si l'utilisateur est dans la liste des utilisateurs autorisés
+            return user_id in self._access_codes.get("authorized_users", [])
+        except Exception as e:
+            print(f"Erreur lors de la vérification de l'autorisation: {e}")
             return False
 
     def generate_temp_code(self, generator_id: int, generator_username: str = None) -> tuple:
@@ -243,6 +202,257 @@ class AdminFeatures:
         except Exception as e:
             print(f"Erreur lors du marquage du code comme utilisé : {e}")
             return False
+
+    def is_user_banned(self, user_id: int) -> bool:
+        """Vérifie si l'utilisateur est banni"""
+        self._access_codes = self._load_access_codes()
+        return int(user_id) in self._access_codes.get("banned_users", [])
+
+    def reload_access_codes(self):
+        """Recharge les codes d'accès depuis le fichier"""
+        self._access_codes = self._load_access_codes()
+        return self._access_codes.get("authorized_users", [])
+
+    def _load_users(self):
+        """Charge les utilisateurs depuis le fichier"""
+        try:
+            with open(self.users_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _save_users(self):
+        """Sauvegarde les utilisateurs"""
+        try:
+            with open(self.users_file, 'w', encoding='utf-8') as f:
+                json.dump(self._users, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde des utilisateurs : {e}")
+
+    def _create_message_keyboard(self):
+        """Crée le clavier standard pour les messages"""
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Menu Principal", callback_data="start_cmd")
+        ]])
+
+    def _load_broadcasts(self):
+        """Charge les broadcasts depuis le fichier"""
+        try:
+            with open(self.broadcasts_file, 'r', encoding='utf-8') as f:
+                broadcasts = json.load(f)
+                for broadcast_id, broadcast in broadcasts.items():
+                    if 'message_ids' not in broadcast:
+                        broadcast['message_ids'] = {}
+                    if 'message_ids' in broadcast:
+                        broadcast['message_ids'] = {
+                            str(user_id): msg_id 
+                            for user_id, msg_id in broadcast['message_ids'].items()
+                        }
+                return broadcasts
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError:
+            print("Erreur de décodage JSON, création d'un nouveau fichier broadcasts")
+            return {}
+
+    def _save_broadcasts(self):
+        """Sauvegarde les broadcasts"""
+        try:
+            with open(self.broadcasts_file, 'w', encoding='utf-8') as f:
+                json.dump(self.broadcasts, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde des broadcasts : {e}")
+
+    def _save_access_codes(self):
+        """Sauvegarde les codes d'accès"""
+        try:
+            with open(self.access_codes_file, 'w', encoding='utf-8') as f:
+                json.dump(self._access_codes, f, indent=4)
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde des codes d'accès : {e}")
+
+    def is_user_in_group(self, user_id: int, group_name: str) -> bool:
+        """Vérifie si l'utilisateur appartient à un groupe spécifique"""
+        self._access_codes = self._load_access_codes()
+        groups = self._access_codes.get("groups", {})
+        return int(user_id) in groups.get(group_name, [])
+        
+    def _load_polls(self):
+        """Charge les sondages depuis le fichier"""
+        try:
+            with open(self.polls_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _save_polls(self):
+        """Sauvegarde les sondages"""
+        try:
+            with open(self.polls_file, 'w', encoding='utf-8') as f:
+                json.dump(self.polls, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde des sondages : {e}")
+
+    def _create_poll_message(self, poll):
+        """Crée le message formaté du sondage"""
+        options_text = ""
+        total_votes = sum(int(count) for count in poll['votes'].values())
+
+        for i, option in enumerate(poll['options']):
+            votes = int(poll['votes'].get(str(i), 0))
+            percentage = (votes / total_votes * 100) if total_votes > 0 else 0
+            bar_length = int((percentage / 100) * 20)
+            progress_bar = "█" * bar_length + "▒" * (20 - bar_length)
+    
+            options_text += f"\n{i+1}. {option}\n"
+            options_text += f"{progress_bar} {votes} votes ({percentage:.1f}%)\n"
+
+        text = (
+            f"📊 *SONDAGE*\n\n"
+            f"❓ {poll['question']}\n\n"
+            f"{options_text}\n"
+            f"👥 Total des votes : {total_votes}\n\n"
+            f"⚠️ Un seul vote par personne"
+        )
+
+        return text
+
+    def list_active_codes(self):
+        """Liste tous les codes actifs et supprime les codes expirés"""
+        current_time = datetime.utcnow().isoformat()
+    
+        try:
+            with open('config/access_codes.json', 'r') as f:
+                codes = json.load(f)
+        except FileNotFoundError:
+            return []
+   
+        active_codes = [code for code in codes if code["expiration"] > current_time]
+    
+        if len(active_codes) != len(codes):
+            with open('config/access_codes.json', 'w') as f:
+                json.dump(active_codes, f, indent=4)
+    
+        return active_codes
+
+    def _create_poll_keyboard(self, poll_id):
+        """Crée le clavier pour le sondage"""
+        poll = self.polls[poll_id]
+        keyboard = []
+    
+        # Options de vote
+        for i, option in enumerate(poll['options']):
+            keyboard.append([
+                InlineKeyboardButton(
+                    option,
+                    callback_data=f"vote_{poll_id}_{i}"
+                )
+            ])
+    
+        # Bouton menu (utilise start_cmd comme pour les broadcasts)
+        keyboard.append([
+            InlineKeyboardButton("🔄 Menu Principal", callback_data="start_cmd")
+        ])
+    
+        return keyboard
+
+    async def view_poll_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche les détails d'un sondage et options de gestion"""
+        query = update.callback_query
+        await query.answer()
+    
+        try:
+            # Extraire l'ID du sondage
+            _, poll_id = query.data.split("view_poll_")
+        
+            if poll_id not in self.polls:
+                await query.edit_message_text(
+                    "❌ Ce sondage n'existe plus!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")
+                    ]])
+                )
+                return "CHOOSING"
+        
+            poll = self.polls[poll_id]
+            poll_text = self._create_poll_message(poll)
+        
+            # Ajouter les boutons de gestion
+            keyboard = [
+                [InlineKeyboardButton("❌ Supprimer le sondage", callback_data=f"delete_poll_{poll_id}")],
+                [InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")]
+            ]
+        
+            await query.edit_message_text(
+                f"{poll_text}\n\n"
+                f"📅 Créé le : {poll['created_at']}\n"
+                f"👥 Nombre de votants : {len(poll.get('voters', {}))}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        
+        except Exception as e:
+            print(f"Erreur dans view_poll_details: {e}")
+            await query.edit_message_text(
+                "Une erreur est survenue!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")
+                ]])
+            )
+    
+        return "CHOOSING"
+
+    async def delete_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Supprime un sondage"""
+        query = update.callback_query
+        await query.answer()
+    
+        try:
+            # Extraire l'ID du sondage
+            _, poll_id = query.data.split("delete_poll_")
+        
+            if poll_id not in self.polls:
+                await query.edit_message_text(
+                    "❌ Ce sondage n'existe plus!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")
+                    ]])
+                )
+                return "CHOOSING"
+        
+            poll = self.polls[poll_id]
+        
+            # Supprimer le message du sondage pour tous les utilisateurs
+            for chat_id, message_id in poll['message_ids'].items():
+                try:
+                    await context.bot.delete_message(
+                        chat_id=int(chat_id),
+                        message_id=message_id
+                    )
+                except Exception as e:
+                    print(f"Erreur suppression message pour {chat_id}: {e}")
+        
+            # Supprimer le sondage de la liste
+            del self.polls[poll_id]
+            self._save_polls()
+        
+            await query.edit_message_text(
+                "✅ Sondage supprimé avec succès!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")
+                ]])
+            )
+        
+        except Exception as e:
+            print(f"Erreur dans delete_poll: {e}")
+            await query.edit_message_text(
+                "Une erreur est survenue!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="view_active_polls")
+                ]])
+            )
+    
+        return "CHOOSING"
 
     async def handle_generate_multiple_codes(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère la génération de plusieurs codes d'accès"""
@@ -331,46 +541,58 @@ class AdminFeatures:
 
     async def handle_code_number_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Traite le nombre de codes demandé"""
-        if str(update.effective_user.id) not in self.admin_ids:
-            await update.message.reply_text("❌ Vous n'êtes pas autorisé à utiliser cette fonction.")
-            return self.STATES['CHOOSING']
-
         try:
-            num = int(update.message.text)
-            if num <= 0 or num > 20:
-                raise ValueError()
+            # Vérifier les permissions admin
+            if str(update.effective_user.id) not in self.admin_ids:
+                await update.message.reply_text("❌ Vous n'êtes pas autorisé à utiliser cette fonction.")
+                return self.STATES['CHOOSING']
+
+            try:
+                num = int(update.message.text)
+                if num <= 0 or num > 20:
+                    raise ValueError()
             
-            # Supprimer le message de l'utilisateur
-            await update.message.delete()
+                # Supprimer le message de l'utilisateur
+                try:
+                    await update.message.delete()
+                except:
+                    pass
         
-            codes_text = "🎫 *Codes générés :*\n\n"
-            for _ in range(num):
-                code, expiration = self.generate_temp_code(
-                    update.effective_user.id,
-                    update.effective_user.username
+                codes_text = "🎫 *Codes générés :*\n\n"
+                for _ in range(num):
+                    code, expiration = self.generate_temp_code()
+                    exp_date = datetime.fromisoformat(expiration)
+                    exp_str = exp_date.strftime("%d/%m/%Y à %H:%M")
+                    codes_text += f"*Code d'accès temporaire :*\n"
+                    codes_text += f"`{code}\n"
+                    codes_text += f"⚠️ Code à usage unique\n"
+                    codes_text += f"⏰ Expire le {exp_str}`\n\n"
+        
+                keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="back_to_codes_menu")]]
+        
+                await update.message.reply_text(
+                    codes_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
                 )
-                exp_date = datetime.fromisoformat(expiration)
-                exp_str = exp_date.strftime("%d/%m/%Y à %H:%M")
-                codes_text += f"📎 *Code:* `{code}`\n"
-                codes_text += f"⚠️ _Code à usage unique, expire le {exp_str}_\n"
-                codes_text += f"👤 _Généré par:_ @{update.effective_user.username or 'Unknown'}\n\n"
+                return self.STATES['CHOOSING']
         
-            keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="generate_multiple_codes")]]
-        
+            except ValueError:
+                keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="back_to_codes_menu")]]
+                await update.message.reply_text(
+                    "❌ Erreur : Veuillez entrer un nombre valide entre 1 et 20.",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return self.STATES['WAITING_CODE_NUMBER']
+            
+        except Exception as e:
+            print(f"Erreur dans handle_code_number_input : {e}")
+            keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="back_to_codes_menu")]]
             await update.message.reply_text(
-                codes_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
-            return self.STATES['CHOOSING']
-        
-        except ValueError:
-            keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="generate_multiple_codes")]]
-            await update.message.reply_text(
-                "❌ Erreur : Veuillez entrer un nombre valide entre 1 et 20.",
+                "❌ Une erreur est survenue.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            return self.STATES['WAITING_CODE_NUMBER']
+            return self.STATES['CHOOSING']
 
     async def generate_codes(self, update: Update, context: ContextTypes.DEFAULT_TYPE, num_codes: int = 1):
         """Génère un nombre spécifié de codes"""
@@ -555,7 +777,1104 @@ class AdminFeatures:
     
         return await self.show_codes_history(update, context)
 
-    async def ban_user(self, user_id: int) -> bool:
+    async def manage_polls(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère les sondages"""
+        query = update.callback_query
+        await query.answer()
+
+        keyboard = [
+            [InlineKeyboardButton("➕ Nouveau sondage", callback_data="create_poll")],
+            [InlineKeyboardButton("📊 Voir sondages actifs", callback_data="view_active_polls")],
+            [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+        ]
+
+        await query.edit_message_text(
+            "📊 *Gestion des sondages*\n\n"
+            "• Créez un nouveau sondage\n"
+            "• Consultez les sondages actifs",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return "CHOOSING"
+
+    async def create_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Démarre la création d'un sondage"""
+        query = update.callback_query
+        await query.answer()
+
+        # Initialiser le sondage dans le context
+        context.user_data['temp_poll'] = {
+            'question': None,
+            'options': [],
+            'votes': {},
+            'voters': {}
+        }
+
+        # Message demandant la question
+        message = await query.edit_message_text(
+            "📊 *Création d'un nouveau sondage*\n\n"
+            "Envoyez la question de votre sondage :",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Annuler", callback_data="manage_polls")
+            ]]),
+            parse_mode='Markdown'
+        )
+    
+        # Sauvegarder l'ID du message pour le supprimer plus tard
+        context.user_data['creation_message_id'] = message.message_id
+        context.user_data['creation_chat_id'] = update.effective_chat.id
+
+        return "WAITING_POLL_QUESTION"
+
+    async def handle_poll_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la réception de la question du sondage"""
+        question = update.message.text
+        context.user_data['temp_poll'] = {
+            'question': question,
+            'options': []
+        }
+
+        # Supprimer le message de la question
+        await update.message.delete()
+
+        # Supprimer le message de création initial
+        try:
+            await context.bot.delete_message(
+                chat_id=context.user_data['creation_chat_id'],
+                message_id=context.user_data['creation_message_id']
+            )
+        except Exception as e:
+            print(f"Erreur lors de la suppression du message de création : {e}")
+
+        # Créer le message des options qui sera réutilisé
+        message = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="✍️ Envoyez maintenant les options de réponse, une par message.\n\n"
+                 "Options actuelles :\n\n"
+                 "Aucune option ajoutée.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Terminé", callback_data="finish_poll_options"),
+                InlineKeyboardButton("🔙 Annuler", callback_data="manage_polls")
+            ]])
+        )
+
+        # Sauvegarder l'ID du message pour le mettre à jour plus tard
+        context.user_data['options_message_id'] = message.message_id
+
+        return "WAITING_POLL_OPTIONS"
+
+    async def handle_poll_option(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la réception des options du sondage"""
+        option = update.message.text
+    
+        # Ajouter l'option
+        context.user_data['temp_poll']['options'].append(option)
+    
+        # Supprimer le message de l'option
+        await update.message.delete()
+
+        # Mettre à jour le message existant avec la nouvelle option
+        options_text = "\n".join([f"- {opt}" for opt in context.user_data['temp_poll']['options']])
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=context.user_data['options_message_id'],
+            text="✍️ Envoyez maintenant les options de réponse, une par message.\n\n"
+                 f"Options actuelles :\n\n{options_text}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Terminé", callback_data="finish_poll_options"),
+                InlineKeyboardButton("🔙 Annuler", callback_data="manage_polls")
+            ]])
+        )
+
+        return "WAITING_POLL_OPTIONS"
+
+    async def finish_poll_options(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Finalise la création du sondage"""
+        query = update.callback_query
+        await query.answer()
+
+        if len(context.user_data['temp_poll']['options']) < 2:
+            await query.edit_message_text(
+                "❌ Le sondage doit avoir au moins 2 options.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Réessayer", callback_data="create_poll"),
+                    InlineKeyboardButton("🔙 Annuler", callback_data="manage_polls")
+                ]])
+            )
+            return "CHOOSING"
+
+        # Créer le sondage
+        poll_id = str(len(self.polls) + 1)
+        poll = {
+            'id': poll_id,
+            'creator_id': update.effective_user.id,
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'question': context.user_data['temp_poll']['question'],
+            'options': context.user_data['temp_poll']['options'],
+            'votes': {str(i): 0 for i in range(len(context.user_data['temp_poll']['options']))},
+            'voters': {},
+            'message_ids': {}
+        }
+
+        # Sauvegarder le sondage
+        self.polls[poll_id] = poll
+        self._save_polls()
+
+        # Créer le message du sondage
+        poll_text = self._create_poll_message(poll)
+        keyboard = self._create_poll_keyboard(poll_id)
+
+        # Envoyer le sondage aux utilisateurs autorisés
+        success_count = 0
+        failed_count = 0
+
+        for user_id in self._access_codes.get("authorized_users", []):
+            try:
+                message = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=poll_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                poll['message_ids'][str(user_id)] = message.message_id
+                success_count += 1
+            except Exception as e:
+                print(f"Erreur lors de l'envoi du sondage à {user_id}: {e}")
+                failed_count += 1
+
+        # Mettre à jour les message_ids
+        self.polls[poll_id] = poll
+        self._save_polls()
+
+        # Message de confirmation temporaire
+        confirmation_message = await query.edit_message_text(
+            f"✅ Sondage créé et envoyé avec succès!\n\n"
+            f"📊 Statistiques :\n"
+            f"✓ Envois réussis : {success_count}\n"
+            f"❌ Échecs : {failed_count}"
+        )
+
+        # Programmer la suppression du message après 2 secondes
+        await asyncio.sleep(2)
+        try:
+            await confirmation_message.delete()
+        except Exception as e:
+            print(f"Erreur lors de la suppression du message de confirmation : {e}")
+
+        return "CHOOSING"
+
+    async def view_active_polls(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des sondages actifs"""
+        query = update.callback_query
+        await query.answer()
+
+        keyboard = []
+    
+        if self.polls:
+            for poll_id, poll in self.polls.items():
+                question = poll.get('question', '')[:30]
+                keyboard.append([InlineKeyboardButton(
+                    f"📊 {question}...",
+                    callback_data=f"view_poll_{poll_id}"
+                )])
+        else:
+            keyboard.append([InlineKeyboardButton("Aucun sondage actif", callback_data="noop")])
+    
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="manage_polls")])
+
+        await query.edit_message_text(
+            "📊 *Sondages actifs*\n\n"
+            "Sélectionnez un sondage pour le gérer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return "CHOOSING"
+
+    async def handle_vote(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère les votes sur un sondage"""
+        query = update.callback_query
+        user_id = update.effective_user.id
+    
+        print(f"\n=== Tentative de vote ===")
+        print(f"User ID: {user_id}")
+        print(f"Callback data reçu: {query.data}")
+        print(f"Message ID: {query.message.message_id}")
+    
+        try:
+            _, poll_id, option_index = query.data.split("_")
+            option_index = str(option_index)
+        
+            if poll_id not in self.polls:
+                await query.answer("Ce sondage n'existe plus!", show_alert=True)
+                return
+
+            poll = self.polls[poll_id]
+            user_id_str = str(user_id)
+
+            # Vérifier si l'utilisateur peut voter (est dans message_ids)
+            if user_id_str not in poll['message_ids']:
+                print(f"Utilisateur {user_id} n'est pas autorisé à voter")
+                await query.answer("Vous n'êtes pas autorisé à voter!", show_alert=True)
+                return
+
+            if user_id_str in poll.get('voters', {}):
+                print(f"Utilisateur {user_id} a déjà voté")
+                await query.answer("Vous avez déjà voté!", show_alert=True)
+                return "CHOOSING"
+
+            # Voter
+            if 'votes' not in poll:
+                poll['votes'] = {}
+            if 'voters' not in poll:
+                poll['voters'] = {}
+            
+            poll['votes'][option_index] = poll['votes'].get(option_index, 0) + 1
+            poll['voters'][user_id_str] = option_index
+        
+            # Sauvegarder et mettre à jour
+            self.polls[poll_id] = poll
+            self._save_polls()
+
+            # Mettre à jour tous les messages
+            poll_text = self._create_poll_message(poll)
+            keyboard = self._create_poll_keyboard(poll_id)
+
+            for chat_id, message_id in poll['message_ids'].items():
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=message_id,
+                        text=poll_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    print(f"Erreur mise à jour pour {chat_id}: {e}")
+
+            await query.answer("✅ Vote enregistré!", show_alert=True)
+
+        except Exception as e:
+            print(f"Erreur dans handle_vote: {e}")
+            import traceback
+            traceback.print_exc()
+            await query.answer("Une erreur est survenue!", show_alert=True)
+
+        return "CHOOSING"
+
+    async def manage_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche le menu de gestion des groupes"""
+        query = update.callback_query
+        await query.answer()
+
+        keyboard = [
+            [InlineKeyboardButton("➕ Créer un groupe", callback_data="create_group")],
+            [InlineKeyboardButton("➕ Ajouter un utilisateur", callback_data="add_group_user")],
+            [InlineKeyboardButton("❌ Retirer un utilisateur", callback_data="remove_group_user")],
+            [InlineKeyboardButton("🗑️ Supprimer un groupe", callback_data="delete_group")],
+            [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+            [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+        ]
+
+        await query.edit_message_text(
+            "👥 *Gestion des groupes*\n\n"
+            "Sélectionnez une action à effectuer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def remove_group_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des groupes pour retirer un utilisateur"""
+        query = update.callback_query
+        await query.answer()
+
+        # Vérifie si des groupes existent
+        groups = self._access_codes.get("groups", {})
+        if not groups:
+            await query.edit_message_text(
+                "❌ Aucun groupe n'existe.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return CHOOSING
+
+        # Créer la liste des groupes qui ont au moins un membre
+        keyboard = []
+        for group_name, members in groups.items():
+            if members:  # Ne montre que les groupes qui ont des membres
+                keyboard.append([InlineKeyboardButton(
+                    f"{group_name} ({len(members)} membres)",
+                    callback_data=f"remove_from_group_{group_name}"
+                )])
+
+        if not keyboard:  # Si aucun groupe n'a de membres
+            await query.edit_message_text(
+                "❌ Aucun groupe ne contient de membres à retirer.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return CHOOSING
+
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")])
+
+        await query.edit_message_text(
+            "👥 *Retirer un utilisateur d'un groupe*\n\n"
+            "Sélectionnez le groupe :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+        return CHOOSING
+
+    async def select_user_to_remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des utilisateurs d'un groupe pour en retirer un"""
+        query = update.callback_query
+        await query.answer()
+
+        group_name = query.data.replace("remove_from_group_", "")
+        members = self._access_codes.get("groups", {}).get(group_name, [])
+
+        if not members:
+            await query.edit_message_text(
+                "❌ Ce groupe ne contient aucun membre.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="remove_group_user")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return CHOOSING
+
+        keyboard = []
+        for user_id in members:
+            try:
+                # Récupérer les informations de l'utilisateur depuis le cache ou les données sauvegardées
+                user_info = self._user_info.get(str(user_id), {"username": str(user_id)})
+                display_name = user_info.get("username", str(user_id))
+            
+                keyboard.append([InlineKeyboardButton(
+                    display_name,
+                    callback_data=f"remove_user_{group_name}_{user_id}"
+                )])
+            except Exception as e:
+                print(f"Erreur lors de la création du bouton pour l'utilisateur {user_id}: {e}")
+
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="remove_group_user")])
+
+        await query.edit_message_text(
+            f"👥 *Retirer un utilisateur du groupe {group_name}*\n\n"
+            "Sélectionnez l'utilisateur à retirer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+        return CHOOSING
+
+    async def remove_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Retire l'utilisateur sélectionné du groupe"""
+        query = update.callback_query
+        await query.answer()
+    
+        try:
+            # Extraire les informations du callback_data
+            parts = query.data.split("_")
+            if len(parts) >= 4:  # S'assurer qu'il y a assez de parties
+                group_name = parts[2]  # La troisième partie est le nom du groupe
+                user_id = int(parts[3])  # La quatrième partie est l'ID utilisateur
+            
+                if group_name in self._access_codes.get("groups", {}) and user_id in self._access_codes["groups"][group_name]:
+                    self._access_codes["groups"][group_name].remove(user_id)
+                    self._save_access_codes()
+            
+                    await query.edit_message_text(
+                        f"✅ Utilisateur retiré du groupe *{group_name}* avec succès!",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("➕ Retirer un autre utilisateur", callback_data="remove_group_user")],
+                            [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+                            [InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")]
+                        ]),
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await query.edit_message_text(
+                        "❌ L'utilisateur n'est plus dans ce groupe.",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                        ]])
+                    )
+            else:
+                raise ValueError("Format de callback_data invalide")
+            
+        except Exception as e:
+            print(f"Erreur lors du retrait de l'utilisateur: {e}")
+            await query.edit_message_text(
+                "❌ Une erreur s'est produite lors du retrait de l'utilisateur.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]])
+            )
+    
+        return CHOOSING
+
+    async def select_user_to_remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des utilisateurs d'un groupe pour en retirer un"""
+        query = update.callback_query
+        await query.answer()
+    
+        group_name = query.data.replace("remove_from_group_", "")
+        members = self._access_codes.get("groups", {}).get(group_name, [])
+    
+        if not members:
+            await query.edit_message_text(
+                f"❌ Le groupe *{group_name}* n'a pas de membres.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="remove_group_user")
+                ]]),
+                parse_mode='Markdown'
+            )
+            return CHOOSING
+
+        keyboard = []
+        for member_id in members:
+            user_data = self._users.get(str(member_id), {})
+            username = user_data.get('username', '')
+            first_name = user_data.get('first_name', '')
+            display_name = f"@{username}" if username else first_name or str(member_id)
+            keyboard.append([InlineKeyboardButton(
+                display_name,
+                callback_data=f"remove_user_{group_name}_{member_id}"
+            )])
+    
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="remove_group_user")])
+
+        await query.edit_message_text(
+            f"👥 *Retirer un utilisateur du groupe {group_name}*\n\n"
+            "Sélectionnez l'utilisateur à retirer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def delete_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des groupes à supprimer"""
+        query = update.callback_query
+        await query.answer()
+
+        groups = self._access_codes.get("groups", {})
+        if not groups:
+            await query.edit_message_text(
+                "❌ Aucun groupe n'existe.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]])
+            )
+            return CHOOSING
+
+        keyboard = []
+        for group_name in groups.keys():
+            keyboard.append([InlineKeyboardButton(
+                f"🗑️ {group_name}",
+                callback_data=f"confirm_delete_group_{group_name}"
+            )])
+    
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")])
+
+        await query.edit_message_text(
+            "🗑️ *Supprimer un groupe*\n\n"
+            "Sélectionnez le groupe à supprimer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def confirm_delete_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Supprime le groupe sélectionné et ses catégories associées"""
+        query = update.callback_query
+        await query.answer()
+
+        group_name = query.data.replace("confirm_delete_group_", "")
+        print(f"Tentative de suppression du groupe: {group_name}")
+
+        # Recharger le CATALOG depuis le fichier
+        try:
+            with open('config/catalog.json', 'r', encoding='utf-8') as f:
+                self.CATALOG = json.load(f)
+            print(f"Catalogue chargé avec succès")
+        except Exception as e:
+            print(f"Erreur lors du rechargement du catalog: {e}")
+            return
+
+        if group_name in self._access_codes.get("groups", {}):
+            # Supprimer le groupe des access_codes
+            del self._access_codes["groups"][group_name]
+            self._save_access_codes()
+            print(f"Groupe {group_name} supprimé des access_codes")
+
+            # Liste des préfixes possibles pour ce groupe
+            group_prefixes = [
+                f"{group_name}_",
+                f"{group_name.lower()}_",
+                f"{group_name.upper()}_",
+                f"{group_name.capitalize()}_"
+            ]
+
+            # Créer un nouveau catalogue
+            new_catalog = {}
+            
+            # Copier et nettoyer les catégories
+            for category, content in self.CATALOG.items():
+                if category == 'stats':
+                    continue
+                    
+                # Vérifier si c'est une catégorie du groupe
+                is_group_category = any(category.startswith(prefix) for prefix in group_prefixes)
+                
+                if is_group_category:
+                    # Ne pas copier les catégories du groupe
+                    print(f"Suppression de la catégorie de groupe: {category}")
+                    continue
+                else:
+                    # Pour les catégories publiques, filtrer les produits du groupe
+                    if isinstance(content, list):
+                        filtered_products = []
+                        for product in content:
+                            if isinstance(product, dict) and 'name' in product:
+                                is_group_product = any(product['name'].startswith(prefix) 
+                                                     for prefix in group_prefixes)
+                                if not is_group_product:
+                                    filtered_products.append(product)
+                                else:
+                                    print(f"Suppression du produit de groupe {product['name']} de la catégorie {category}")
+                        
+                        # Toujours conserver la catégorie, même si elle est vide
+                        new_catalog[category] = filtered_products
+                        print(f"Catégorie publique {category} conservée avec {len(filtered_products)} produits")
+
+            # Gérer les statistiques
+            new_stats = {
+                'total_views': 0,
+                'category_views': {},
+                'product_views': {},
+                'last_updated': datetime.now().strftime('%H:%M:%S'),
+                'last_reset': self.CATALOG.get('stats', {}).get('last_reset', datetime.now().strftime('%Y-%m-%d'))
+            }
+
+            # Copier les statistiques des éléments non supprimés
+            old_stats = self.CATALOG.get('stats', {})
+            
+            # Copier les vues des catégories (seulement pour les catégories non-groupe)
+            for category, views in old_stats.get('category_views', {}).items():
+                if not any(category.startswith(prefix) for prefix in group_prefixes):
+                    new_stats['category_views'][category] = views
+                    new_stats['total_views'] += views
+
+            # Copier les vues des produits (sauf ceux du groupe)
+            for category, products in old_stats.get('product_views', {}).items():
+                if not any(category.startswith(prefix) for prefix in group_prefixes):
+                    new_stats['product_views'][category] = {}
+                    for product_name, product_views in products.items():
+                        # Ne pas copier les stats des produits du groupe
+                        if not any(product_name.startswith(prefix) for prefix in group_prefixes):
+                            new_stats['product_views'][category][product_name] = product_views
+
+            # Ajouter les statistiques au catalogue
+            new_catalog['stats'] = new_stats
+
+            # Mettre à jour et sauvegarder le catalogue
+            self.CATALOG = new_catalog
+            print(f"Nouveau catalogue créé avec {len(new_catalog) - 1} catégories")
+
+            try:
+                with open('config/catalog.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.CATALOG, f, indent=4, ensure_ascii=False)
+                print("Catalogue sauvegardé avec succès")
+
+                # Mettre à jour la variable globale CATALOG
+                global CATALOG
+                CATALOG = self.CATALOG
+
+            except Exception as e:
+                print(f"Erreur lors de la sauvegarde: {e}")
+                await query.edit_message_text(
+                    "❌ Erreur lors de la sauvegarde du catalogue.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                    ]])
+                )
+                return CHOOSING
+
+            await query.edit_message_text(
+                f"✅ Groupe *{group_name}* et tous ses contenus supprimés avec succès!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑️ Supprimer un autre groupe", callback_data="delete_group")],
+                    [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+                    [InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")]
+                ]),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Ce groupe n'existe plus.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]])
+            )
+        return CHOOSING
+      
+    async def list_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des groupes et leurs membres"""
+        query = update.callback_query
+        await query.answer()
+
+        text = "📋 *Liste des groupes*\n\n"
+        groups = self._access_codes.get("groups", {})
+
+        def escape_markdown(text):
+            """Échappe les caractères spéciaux Markdown"""
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            for char in special_chars:
+                text = text.replace(char, f"\\{char}")
+            return text
+
+        if not groups:
+            text += "Aucun groupe créé."
+        else:
+            for group_name, members in groups.items():
+                text += f"*{escape_markdown(group_name)}*\n"
+                if members:
+                    for member_id in members:
+                        user_data = self._users.get(str(member_id), {})
+                        username = user_data.get('username', '')
+                        first_name = user_data.get('first_name', '')
+                        if username:
+                            display_name = f"@{escape_markdown(username)}"
+                        else:
+                            display_name = escape_markdown(first_name) if first_name else str(member_id)
+                        text += f"└ {display_name}\n"
+                else:
+                    text += "└ Aucun membre\n"
+                text += "\n"
+
+        keyboard = [[InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")]]
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def start_create_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Démarre le processus de création d'un groupe"""
+        query = update.callback_query
+        await query.answer()
+
+        await query.edit_message_text(
+            "👥 *Création d'un nouveau groupe*\n\n"
+            "Envoyez le nom du nouveau groupe :",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Annuler", callback_data="manage_groups")
+            ]]),
+            parse_mode='Markdown'
+        )
+        return WAITING_GROUP_NAME
+
+    async def handle_group_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la création d'un nouveau groupe"""
+        group_name = update.message.text.strip()
+    
+        # Vérifier si le groupe existe déjà
+        if "groups" in self._access_codes and group_name in self._access_codes["groups"]:
+            await update.message.reply_text(
+                "❌ Ce groupe existe déjà.\n"
+                "Veuillez choisir un autre nom:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Annuler", callback_data="manage_groups")
+                ]])
+            )
+            return WAITING_GROUP_NAME
+
+        # Créer le groupe
+        if "groups" not in self._access_codes:
+            self._access_codes["groups"] = {}
+    
+        self._access_codes["groups"][group_name] = []
+        self._save_access_codes()
+
+        # Supprimer les messages
+        try:
+            # Supprimer le message précédent
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=update.message.message_id - 1
+            )
+            # Supprimer le message de l'utilisateur
+            await update.message.delete()
+        except Exception as e:
+            print(f"Erreur lors de la suppression des messages: {e}")
+
+        # Afficher le menu de gestion des groupes avec message de succès
+        keyboard = [
+            [InlineKeyboardButton("➕ Créer un groupe", callback_data="create_group")],
+            [InlineKeyboardButton("➕ Ajouter un utilisateur", callback_data="add_group_user")],
+            [InlineKeyboardButton("❌ Retirer un utilisateur", callback_data="remove_group_user")],
+            [InlineKeyboardButton("🗑️ Supprimer un groupe", callback_data="delete_group")],
+            [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+            [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+        ]
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ Groupe *{group_name}* créé avec succès!\n\n"
+                 "👥 *Gestion des groupes*\n"
+                 "Sélectionnez une action à effectuer :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    
+        return CHOOSING
+
+    async def show_add_user_to_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Affiche la liste des groupes pour ajouter un utilisateur"""
+        query = update.callback_query
+        await query.answer()
+
+        groups = self._access_codes.get("groups", {})
+        if not groups:
+            await query.edit_message_text(
+                "❌ Aucun groupe n'existe.\n"
+                "Créez d'abord un groupe.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")
+                ]])
+            )
+            return CHOOSING
+
+        keyboard = []
+        for group_name in groups.keys():
+            keyboard.append([InlineKeyboardButton(
+                group_name,
+                callback_data=f"select_group_{group_name}"
+            )])
+    
+        keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")])
+
+        await query.edit_message_text(
+            "👥 *Ajouter un utilisateur*\n\n"
+            "Sélectionnez le groupe :",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def select_group_for_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la sélection du groupe pour ajouter un utilisateur"""
+        query = update.callback_query
+        await query.answer()
+    
+        group_name = query.data.replace("select_group_", "")
+        context.user_data['selected_group'] = group_name
+
+        await query.edit_message_text(
+            f"👤 *Ajout d'un utilisateur au groupe {group_name}*\n\n"
+            "Envoyez l'ID ou le @username de l'utilisateur :",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Retour", callback_data="add_group_user")
+            ]]),
+            parse_mode='Markdown'
+        )
+        return WAITING_GROUP_USER
+
+    async def handle_group_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère l'ajout d'un utilisateur à un groupe"""
+        user_input = update.message.text.strip()
+        group_name = context.user_data.get('selected_group')
+    
+        if not group_name or group_name not in self._access_codes.get("groups", {}):
+            await update.message.reply_text("❌ Erreur: groupe non trouvé.")
+            return CHOOSING
+
+        # Traiter l'entrée de l'utilisateur
+        if user_input.startswith('@'):
+            username = user_input[1:]
+            user_id = None
+            # Chercher l'ID correspondant au username
+            for uid, data in self._users.items():
+                if data.get('username') == username:
+                    user_id = int(uid)
+                    break
+        else:
+            try:
+                user_id = int(user_input)
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ Format invalide. Envoyez un ID valide ou un @username:",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Annuler", callback_data="manage_groups")
+                    ]])
+                )
+                return WAITING_GROUP_USER
+
+        if user_id is None:
+            await update.message.reply_text(
+                "❌ Utilisateur non trouvé.\n"
+                "Envoyez un ID valide ou un @username:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Annuler", callback_data="manage_groups")
+                ]])
+            )
+            return WAITING_GROUP_USER
+
+        # Ajouter l'utilisateur au groupe
+        if user_id not in self._access_codes["groups"][group_name]:
+            self._access_codes["groups"][group_name].append(user_id)
+            self._save_access_codes()
+
+        # Supprimer les messages
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=update.message.message_id - 1
+            )
+            await update.message.delete()
+        except Exception as e:
+            print(f"Erreur lors de la suppression des messages: {e}")
+
+        # Afficher le menu avec confirmation
+        keyboard = [
+            [InlineKeyboardButton("➕ Ajouter un autre utilisateur", callback_data="add_group_user")],
+            [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+            [InlineKeyboardButton("🔙 Retour", callback_data="manage_groups")]
+        ]
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ Utilisateur ajouté au groupe *{group_name}* avec succès!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+        return CHOOSING
+
+    async def select_group_for_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la sélection du groupe lors de la création d'une catégorie"""
+        query = update.callback_query
+        await query.answer()
+    
+        _, group_name, category_name = query.data.replace("select_group_for_category_", "").split("_", 2)
+        user_id = update.effective_user.id
+    
+        # Vérifier que l'utilisateur est toujours membre du groupe
+        if user_id not in self._access_codes["groups"].get(group_name, []):
+            await query.edit_message_text(
+                "❌ Vous n'êtes plus membre de ce groupe.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="admin")
+                ]])
+            )
+            return CHOOSING
+        
+        # Créer la catégorie avec le préfixe du groupe
+        full_category_name = f"{group_name}_{category_name}"
+    
+        if full_category_name in CATALOG:
+            await query.edit_message_text(
+                "❌ Cette catégorie existe déjà.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Retour", callback_data="admin")
+                ]])
+            )
+            return CHOOSING
+        
+        CATALOG[full_category_name] = []
+        save_catalog(CATALOG)
+    
+        await query.edit_message_text(
+            f"✅ Catégorie *{category_name}* créée avec succès dans le groupe *{group_name}*!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Ajouter une autre catégorie", callback_data="add_category")],
+                [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+            ]),
+            parse_mode='Markdown'
+        )
+        return CHOOSING
+
+    async def handle_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gère la commande /group"""
+        try:
+            # Vérifier si l'utilisateur est admin
+            if str(update.effective_user.id) not in ADMIN_IDS:
+                return
+
+            # Supprimer la commande
+            try:
+                await update.message.delete()
+            except Exception as e:
+                print(f"Erreur lors de la suppression de la commande group: {e}")
+
+            # Vérifier les arguments
+            if not context.args or len(context.args) < 2:
+                keyboard = [
+                    [InlineKeyboardButton("➕ Créer un groupe", callback_data="create_group")],
+                    [InlineKeyboardButton("➕ Ajouter un utilisateur", callback_data="add_group_user")],
+                    [InlineKeyboardButton("❌ Retirer un utilisateur", callback_data="remove_group_user")],
+                    [InlineKeyboardButton("🗑️ Supprimer un groupe", callback_data="delete_group")],
+                    [InlineKeyboardButton("📋 Liste des groupes", callback_data="list_groups")],
+                    [InlineKeyboardButton("🔙 Retour", callback_data="admin")]
+                ]
+
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="👥 *Gestion des groupes*\n\n"
+                         "Sélectionnez une action à effectuer :",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                return
+
+            action = context.args[0].lower()
+            group_name = context.args[1]
+
+            if action not in ['add', 'remove', 'create', 'delete']:
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ Action invalide. Utilisez: add, remove, create, ou delete"
+                )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            # Créer un groupe
+            if action == 'create':
+                if "groups" not in self._access_codes:
+                    self._access_codes["groups"] = {}
+            
+                if group_name in self._access_codes["groups"]:
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ Ce groupe existe déjà."
+                    )
+                    await asyncio.sleep(3)
+                    await message.delete()
+                    return
+
+                self._access_codes["groups"][group_name] = []
+                self._save_access_codes()
+            
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"✅ Groupe '{group_name}' créé avec succès!"
+                )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            # Supprimer un groupe
+            if action == 'delete':
+                if group_name in self._access_codes.get("groups", {}):
+                    del self._access_codes["groups"][group_name]
+                    self._save_access_codes()
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"✅ Groupe '{group_name}' supprimé avec succès!"
+                    )
+                else:
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ Groupe non trouvé."
+                    )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            # Ajouter ou retirer un utilisateur
+            if len(context.args) < 3:
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ Utilisateur non spécifié."
+                )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            user_input = context.args[2]
+        
+            # Traiter l'entrée utilisateur
+            if user_input.startswith('@'):
+                username = user_input[1:]
+                user_id = None
+                for uid, data in self._users.items():
+                    if data.get('username') == username:
+                        user_id = int(uid)
+                        break
+            else:
+                try:
+                    user_id = int(user_input)
+                except ValueError:
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ Format d'ID utilisateur invalide."
+                    )
+                    await asyncio.sleep(3)
+                    await message.delete()
+                    return
+
+            if user_id is None:
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ Utilisateur non trouvé."
+                )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            if action == 'add':
+                if group_name not in self._access_codes.get("groups", {}):
+                    self._access_codes["groups"][group_name] = []
+            
+                if user_id not in self._access_codes["groups"][group_name]:
+                    self._access_codes["groups"][group_name].append(user_id)
+                    self._save_access_codes()
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"✅ Utilisateur ajouté au groupe '{group_name}'!"
+                    )
+                else:
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ L'utilisateur est déjà dans ce groupe."
+                    )
+
+            elif action == 'remove':
+                if group_name in self._access_codes.get("groups", {}) and user_id in self._access_codes["groups"][group_name]:
+                    self._access_codes["groups"][group_name].remove(user_id)
+                    self._save_access_codes()
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"✅ Utilisateur retiré du groupe '{group_name}'!"
+                    )
+                else:
+                    message = await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ L'utilisateur n'est pas dans ce groupe."
+                    )
+
+            await asyncio.sleep(3)
+            await message.delete()
+
+        except Exception as e:
+            print(f"Erreur dans handle_group_command: {e}")
+            message = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Une erreur est survenue."
+            )
+            await asyncio.sleep(3)
+            await message.delete()
+
+    async def ban_user(self, user_id: int, context: ContextTypes.DEFAULT_TYPE = None) -> bool:
         """Banni un utilisateur"""
         try:
             # Convertir en int si c'est un string
@@ -573,6 +1892,34 @@ class AdminFeatures:
             if user_id not in self._access_codes["banned_users"]:
                 self._access_codes["banned_users"].append(user_id)
                 self._save_access_codes()
+        
+            # Si on a le context, on supprime les messages précédents
+            if context and hasattr(context, 'user_data'):
+                chat_id = user_id  # Le chat_id est le même que le user_id dans un chat privé
+            
+                # Liste des clés des messages à supprimer
+                messages_to_delete = [
+                    'menu_message_id',
+                    'banner_message_id',
+                    'category_message_id',
+                    'last_product_message_id',
+                    'initial_welcome_message_id'
+                ]
+            
+                # Supprimer les messages un par un
+                for message_key in messages_to_delete:
+                    if message_key in context.user_data:
+                        try:
+                            await context.bot.delete_message(
+                                chat_id=chat_id,
+                                message_id=context.user_data[message_key]
+                            )
+                            del context.user_data[message_key]
+                        except Exception as e:
+                            print(f"Erreur lors de la suppression du message {message_key}: {e}")
+            
+                # Vider toutes les données utilisateur
+                context.user_data.clear()
         
             return True
         except Exception as e:
@@ -645,84 +1992,78 @@ class AdminFeatures:
     async def handle_ban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère la commande /ban"""
         try:
-            # Supprimer la commande /ban
-            try:
-                await update.message.delete()
-            except Exception as e:
-                print(f"Erreur lors de la suppression de la commande ban: {e}")
-
             # Vérifier si l'utilisateur est admin
             if not self.is_user_authorized(update.effective_user.id):
                 return
 
             # Vérifier les arguments
-            if not context.args:
-                message = await update.message.reply_text(
-                    "❌ Usage : /ban <user_id> ou /ban @username"
+            args = update.message.text.split()
+            if len(args) < 2:
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ Usage : /ban <user_id>"
                 )
-                # Supprimer le message après 3 secondes
-                async def delete_message():
-                    await asyncio.sleep(3)
-                    try:
-                        await message.delete()
-                    except Exception as e:
-                        print(f"Error deleting message: {e}")
-                asyncio.create_task(delete_message())
+                await asyncio.sleep(3)
+                await message.delete()
                 return
 
-            target = context.args[0]
-        
-            # Si c'est un username
-            if target.startswith('@'):
-                username = target[1:]
-                user_found = False
-                for user_id, user_data in self._users.items():
-                    if user_data.get('username') == username:
-                        target = user_id
-                        user_found = True
-                        break
-                if not user_found:
-                    message = await update.message.reply_text("❌ Utilisateur non trouvé.")
-                    # Supprimer le message après 3 secondes
-                    async def delete_message():
-                        await asyncio.sleep(3)
-                        try:
-                            await message.delete()
-                        except Exception as e:
-                            print(f"Error deleting message: {e}")
-                    asyncio.create_task(delete_message())
-                    return
+            # Récupérer l'ID de l'utilisateur à bannir
+            try:
+                target_user_id = int(args[1])
+                target_chat_id = target_user_id  # Dans Telegram, user_id = chat_id pour les conversations privées
+            except ValueError:
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ L'ID utilisateur doit être un nombre"
+                )
+                await asyncio.sleep(3)
+                await message.delete()
+                return
+
+            # Supprimer tous les messages du bot pour l'utilisateur banni
+            try:
+                # Essayer de supprimer les derniers messages dans le chat avec l'utilisateur
+                for i in range(50):  # Essayer de supprimer les 50 derniers messages
+                    try:
+                        await context.bot.delete_message(
+                            chat_id=target_chat_id,
+                            message_id=update.message.message_id - i
+                        )
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"Erreur lors de la suppression des messages: {e}")
 
             # Bannir l'utilisateur
-            if await self.ban_user(target):
-                message = await update.message.reply_text(f"✅ Utilisateur {target} banni avec succès.")
+            if await self.ban_user(target_user_id, context):
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"✅ Utilisateur {target_user_id} banni avec succès"
+                )
             else:
-                message = await update.message.reply_text("❌ Erreur lors du bannissement.")
+                message = await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ Erreur lors du bannissement de l'utilisateur"
+                )
 
-            # Supprimer le message de confirmation après 3 secondes
-            async def delete_message():
-                await asyncio.sleep(3)
-                try:
-                    await message.delete()
-                except Exception as e:
-                    print(f"Error deleting message: {e}")
-        
-            asyncio.create_task(delete_message())
+            # Supprimer la commande /ban
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+
+            await asyncio.sleep(3)
+            await message.delete()
 
         except Exception as e:
-            print(f"Erreur dans handle_ban_command : {e}")
-            message = await update.message.reply_text("❌ Une erreur est survenue.")
-        
-            # Supprimer le message d'erreur après 3 secondes
-            async def delete_message():
-                await asyncio.sleep(3)
-                try:
-                    await message.delete()
-                except Exception as e:
-                    print(f"Error deleting message: {e}")
-        
-            asyncio.create_task(delete_message())
-
+            print(f"Erreur dans handle_ban_command: {e}")
+            message = await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Une erreur est survenue"
+            )
+            await asyncio.sleep(3)
+            await message.delete()
+            
     async def handle_unban_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gère le débannissement depuis le callback"""
         try:
@@ -921,10 +2262,9 @@ class AdminFeatures:
 
             # Pour les utilisateurs qui n'ont pas reçu le message
             for user_id in self._users.keys():
-                user_id_int = int(user_id)
                 if (str(user_id) not in messages_updated and 
-                    user_id_int != admin_id and
-                    (not self.is_access_control_enabled() or self.is_user_authorized(user_id_int))):
+                    self.is_user_authorized(int(user_id)) and 
+                    int(user_id) != admin_id):  # Skip l'admin
                     try:
                         sent_msg = await context.bot.send_message(
                             chat_id=user_id,
@@ -1010,7 +2350,7 @@ class AdminFeatures:
 
         for user_id in self._users.keys():
             user_id_int = int(user_id)
-            if self.is_access_control_enabled() and not self.is_user_authorized(user_id_int):
+            if not self.is_user_authorized(user_id_int):
                 print(f"User {user_id_int} not authorized")
                 continue
         
@@ -1020,7 +2360,7 @@ class AdminFeatures:
                         chat_id=user_id,
                         photo=broadcast['file_id'],
                         caption=broadcast['caption'] if broadcast['caption'] else '',
-                        parse_mode='Markdown', 
+                        parse_mode='Markdown',  # Ajout du parse_mode
                         reply_markup=self._create_message_keyboard()
                     )
                 else:
@@ -1032,7 +2372,7 @@ class AdminFeatures:
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=message_text,
-                        parse_mode='Markdown', 
+                        parse_mode='Markdown',  # Ajout du parse_mode
                         reply_markup=self._create_message_keyboard()
                     )
                 success += 1
@@ -1129,16 +2469,11 @@ class AdminFeatures:
                 parse_mode='HTML'
             )
 
+            # Envoi aux utilisateurs autorisés
             for user_id in self._users.keys():
                 user_id_int = int(user_id)
-    
-                # Skip uniquement l'admin OU les non-autorisés si le contrôle est activé
-                if user_id_int == update.effective_user.id:  # Skip toujours l'admin
-                    print(f"Admin {user_id_int} skipped")
-                    continue
-        
-                if self.is_access_control_enabled() and not self.is_user_authorized(user_id_int):
-                    print(f"Unauthorized user {user_id_int} skipped (access control enabled)")
+                if not self.is_user_authorized(user_id_int) or user_id_int == update.effective_user.id:  # Skip non-autorisés et admin
+                    print(f"User {user_id_int} skipped")
                     continue
             
                 try:
@@ -1232,6 +2567,11 @@ class AdminFeatures:
             text += f"✅ Utilisateurs autorisés : {len(authorized_users)}\n"
             text += f"⏳ Utilisateurs en attente : {len(pending_list)}\n"
             text += f"🚫 Utilisateurs bannis : {len(banned_users)}\n"
+
+            # Ajouter l'information sur les groupes
+            groups = self._access_codes.get("groups", {})
+            for group_name, group_users in groups.items():
+                text += f"👥 Groupe {group_name} : {len(group_users)}\n"
             if total_pages > 1:
                 text += f"Page {current_page + 1}/{total_pages}\n"
             text += "\n"
