@@ -3862,17 +3862,73 @@ async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return CHOOSING
 
+async def run_bot():
+    retries = 0
+    max_retries = 5
+    
+    while retries < max_retries:
+        try:
+            application = (
+                Application.builder()
+                .token(TOKEN)
+                .connect_timeout(60.0)  # Augmenté à 60 secondes
+                .read_timeout(60.0)     # Augmenté à 60 secondes
+                .write_timeout(60.0)    # Augmenté à 60 secondes
+                .get_updates_read_timeout(60.0)
+                .get_updates_write_timeout(60.0)
+                .get_updates_connect_timeout(60.0)
+                .build()
+            )
+            
+            # Le reste de votre code...
+            
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY],
+                pool_timeout=60.0,      # Augmenté à 60 secondes
+                read_timeout=60.0,      # Augmenté à 60 secondes
+                write_timeout=60.0,     # Augmenté à 60 secondes
+                connect_timeout=60.0    # Augmenté à 60 secondes
+            )
+            break  # Sort de la boucle si tout fonctionne
+            
+        except Exception as e:
+            print(f"Erreur lors du démarrage du bot: {e}")
+            retries += 1
+            if retries < max_retries:
+                print(f"Tentative de redémarrage ({retries}/{max_retries}) dans 5 secondes...")
+                await asyncio.sleep(5)
+            else:
+                print("Nombre maximum de tentatives atteint. Arrêt du bot.")
+                raise
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if isinstance(context.error, NetworkError):
             print(f"Erreur réseau: {context.error}")
             if update and update.callback_query:
-                await update.callback_query.answer("Erreur de connexion, veuillez réessayer.")
-            await asyncio.sleep(1)  # Attendre avant de réessayer
+                try:
+                    await update.callback_query.answer("Tentative de reconnexion...")
+                except:
+                    pass
+            # Attendre et réessayer automatiquement
+            for attempt in range(3):  # 3 tentatives
+                try:
+                    await asyncio.sleep(2 ** attempt)  # Délai exponentiel
+                    if update and update.callback_query:
+                        await update.callback_query.answer()
+                    return
+                except Exception:
+                    continue
+                    
         elif isinstance(context.error, TimedOut):
             print(f"Timeout: {context.error}")
             if update and update.callback_query:
-                await update.callback_query.answer("La requête a pris trop de temps, veuillez réessayer.")
+                try:
+                    await update.callback_query.answer("Réessai en cours...")
+                except:
+                    pass
             await asyncio.sleep(1)
         else:
             print(f"Une erreur s'est produite: {context.error}")
