@@ -95,25 +95,15 @@ class MultiPlayerGame:
     def split_hand(self, player_id):
         player_data = self.players[player_id]
         current_balance = db.get_balance(player_id)
-
+    
         if self.can_split(player_id):
             # Prélever la mise supplémentaire
             db.set_balance(player_id, current_balance - player_data['bet'])
-
-            # Séparer les mains
-            original_card = player_data['hand'][0]  # Garder une copie de la première carte
-            split_card = player_data['hand'].pop()  # Prendre la deuxième carte
-            
-            # Créer les deux nouvelles mains
-            player_data['hand'] = [original_card, self.deck.deal()]  # Première main
-            player_data['second_hand'] = [split_card, self.deck.deal()]  # Deuxième main
-            
-            # Initialiser les statuts
-            player_data['status'] = 'playing'  # Status global
-            player_data['first_status'] = 'playing'  # Status première main
-            player_data['second_status'] = 'playing'  # Status deuxième main
-            player_data['current_hand'] = 'hand'  # Main active (commence par la première)
-            
+        
+            new_hand = [player_data['hand'].pop()]
+            player_data['hand'] = [player_data['hand'][0], self.deck.deal()]
+            player_data['second_hand'] = [new_hand[0], self.deck.deal()]
+            player_data['status'] = 'playing'
             return True
         return False
 
@@ -258,24 +248,26 @@ class MultiPlayerGame:
 
         for player_id, player_data in self.players.items():
             # Traiter la main principale
-            main_status = player_data.get('first_status', player_data['status'])
-            main_total = self.calculate_hand(player_data['hand'])
+            if 'first_status' in player_data:
+                status = player_data['first_status']
+            else:
+                status = player_data['status']
 
-            # Déterminer le résultat de la première main
-            if main_status == 'bust':
+            if status == 'bust':
                 player_data['first_status'] = 'bust'
                 db.update_game_result(player_id, player_data['bet'], 'lose')
-            elif main_status == 'blackjack':
+            elif status == 'blackjack':
                 player_data['first_status'] = 'blackjack'
                 db.update_game_result(player_id, player_data['bet'], 'blackjack')
             else:  # 'stand'
+                player_total = self.calculate_hand(player_data['hand'])
                 if dealer_bust:
                     player_data['first_status'] = 'win'
                     db.update_game_result(player_id, player_data['bet'], 'win')
-                elif main_total > dealer_total:
+                elif player_total > dealer_total:
                     player_data['first_status'] = 'win'
                     db.update_game_result(player_id, player_data['bet'], 'win')
-                elif main_total < dealer_total:
+                elif player_total < dealer_total:
                     player_data['first_status'] = 'lose'
                     db.update_game_result(player_id, player_data['bet'], 'lose')
                 else:
@@ -287,7 +279,6 @@ class MultiPlayerGame:
                 second_total = self.calculate_hand(player_data['second_hand'])
                 second_status = player_data.get('second_status', 'playing')
 
-                # Déterminer le résultat de la seconde main
                 if second_status == 'bust' or second_total > 21:
                     player_data['second_status'] = 'bust'
                     db.update_game_result(player_id, player_data['bet'], 'lose')
@@ -307,50 +298,6 @@ class MultiPlayerGame:
                     else:
                         player_data['second_status'] = 'push'
                         db.update_game_result(player_id, player_data['bet'], 'push')
-
-    def handle_hit(self, player_id, query):
-        """Gère l'action de tirer une carte"""
-        player_data = self.players[player_id]
-        
-        if 'current_hand' not in player_data:
-            player_data['current_hand'] = 'hand'
-        current_hand = player_data['current_hand']
-        
-        # Ajouter une nouvelle carte à la main actuelle
-        new_card = self.deck.deal()
-        player_data[current_hand].append(new_card)
-        total = self.calculate_hand(player_data[current_hand])
-
-        # Gérer le résultat
-        if total > 21:
-            if current_hand == 'hand' and 'second_hand' in player_data:
-                # Première main bust, passer à la seconde
-                player_data['first_status'] = 'bust'
-                player_data['current_hand'] = 'second_hand'
-                player_data['status'] = 'playing'
-                return "💥 Première main bust! Passons à la seconde main.", False
-            else:
-                # Bust final (soit seconde main, soit pas de split)
-                if current_hand == 'second_hand':
-                    player_data['second_status'] = 'bust'
-                player_data['status'] = 'bust'
-                return "💥 Vous avez dépassé 21!", True
-        
-        elif total == 21:
-            if current_hand == 'hand' and 'second_hand' in player_data:
-                # Blackjack sur première main, passer à la seconde
-                player_data['first_status'] = 'blackjack'
-                player_data['current_hand'] = 'second_hand'
-                player_data['status'] = 'playing'
-                return "🌟 Blackjack sur la première main! Passons à la seconde.", False
-            else:
-                # Blackjack final
-                if current_hand == 'second_hand':
-                    player_data['second_status'] = 'blackjack'
-                player_data['status'] = 'blackjack'
-                return "🌟 Blackjack!", True
-        
-        return f"🎯 Total: {total}", False
 
 class DatabaseManager:
     def __init__(self):
@@ -1526,10 +1473,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("❌ Impossible de splitter la main!")
 
         if query.data == "hit":
-            message, game_ended = game.handle_hit(user.id, query)
-            await query.answer(message)
-            if game_ended:
-                game_ended = game.next_player()
+            if 'current_hand' not in player_data:
+                player_data['current_hand'] = 'hand'
+            current_hand = player_data['current_hand']
+            new_card = game.deck.deal()
+            player_data[current_hand].append(new_card)
+            total = game.calculate_hand(player_data[current_hand])
 
             if total > 21:
                 if current_hand == 'hand' and 'second_hand' in player_data:
@@ -2317,7 +2266,7 @@ def main():
         application.add_handler(CommandHandler("cmds", cmds))
         application.add_handler(CommandHandler("stats", stats))
         application.add_handler(CommandHandler("daily", daily))
-        application.add_handler(CommandHandler("bj", create_game))
+        #application.add_handler(CommandHandler("bj", create_game))
         application.add_handler(CommandHandler("setcredits", set_credits))
         application.add_handler(CommandHandler("addcredits", add_credits))
         application.add_handler(CommandHandler("reset_classement", reset_classement))
