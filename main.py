@@ -19,15 +19,16 @@ CLASSEMENT_CHAT_ID = None     # Ajoutez cette ligne
 last_game_message = {}  # {chat_id: message_id}
 last_end_game_message = {}  # {chat_id: message_id}
 
-# Configuration du logging
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.WARNING 
 )
-logger = logging.getLogger(__name__)
 
-ADMIN_USERS = [5277718388, 8024407169]
-TOKEN = "7712559415:AAEQC9DSxbGwamDO3T1itadsNFXyXEgECe8"
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('telegram').setLevel(logging.WARNING)
+
 GAME_THREAD_ID = 13
 FORBIDDEN_THREADS = [133, 136]
 INITIAL_BALANCE = 1500
